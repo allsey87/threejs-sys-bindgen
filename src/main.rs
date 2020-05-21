@@ -7,6 +7,8 @@ use std::collections::HashMap;
 mod swc;
 mod wasm_bindgen_writer;
 
+// https://github.community/t5/How-to-use-Git-and-GitHub/How-can-I-download-a-specific-folder-from-a-GitHub-repo/td-p/88
+
 fn main() -> std::io::Result<()> {
     let module = swc::parse_module(Path::new("threejs/core/Object3D.d.ts")).expect("Unable to parse module");
 
