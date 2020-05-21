@@ -3,8 +3,6 @@ use swc_ecma_parser::{lexer::Lexer, Parser, Session, SourceFileInput, Syntax, Ts
 use std::path::Path;
 use std::sync::Arc;
 
-pub use swc_ecma_ast as ast;
-
 pub fn parse_module(path: &Path) -> Result<swc_ecma_ast::Module, String> {
     let source_map: Arc<SourceMap> = Default::default();
     let handler =

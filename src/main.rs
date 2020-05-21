@@ -25,14 +25,14 @@ fn main() -> std::io::Result<()> {
 
     for item in &module.body {
         match item {
-            swc::ast::ModuleItem::ModuleDecl(declaration) => {
+            swc_ecma_ast::ModuleItem::ModuleDecl(declaration) => {
                 match declaration {
-                    swc::ast::ModuleDecl::ExportDecl(export) => {
+                    swc_ecma_ast::ModuleDecl::ExportDecl(export) => {
                         let export_decl = &export.decl;
                         match export_decl {
-                            swc::ast::Decl::Class(class_declaration) => {
+                            swc_ecma_ast::Decl::Class(class_declaration) => {
                                 if let Some(super_class) = &class_declaration.class.super_class {
-                                    if let swc::ast::Expr::Ident(_ident) = &**super_class {
+                                    if let swc_ecma_ast::Expr::Ident(_ident) = &**super_class {
                                         //writeln!(&mut output, "#[wasm_bindgen(extends = {})]", ident.sym);    
                                     }
                                 }
@@ -41,15 +41,15 @@ fn main() -> std::io::Result<()> {
                                 //println!("{:?}", class_declaration.class.body);
                                 for class_member in &class_declaration.class.body {
                                     match class_member {
-                                        swc::ast::ClassMember::Constructor(_constructor) => {
+                                        swc_ecma_ast::ClassMember::Constructor(_constructor) => {
                                             //writeln!(&mut output, "#[wasm_bindgen(constructor)]");
                                             // TODO handle arguments (multiple constructors?)                                                
                                             //writeln!(&mut output, "pub fn new() -> {};", this_type);
                                         },
-                                        swc::ast::ClassMember::Method(class_method) => {
-                                            if class_method.kind == swc::ast::MethodKind::Method {
+                                        swc_ecma_ast::ClassMember::Method(class_method) => {
+                                            if class_method.kind == swc_ecma_ast::MethodKind::Method {
                                                 let function = &class_method.function;
-                                                if let swc::ast::PropName::Ident(_ident) = &class_method.key {
+                                                if let swc_ecma_ast::PropName::Ident(_ident) = &class_method.key {
                                                     /*
                                                     writeln!(&mut output,
                                                                 "#[wasm_bindgen(method, js_name = {})]",
@@ -58,7 +58,7 @@ fn main() -> std::io::Result<()> {
                                                     /* handle arguments */
                                                     let mut arguments = String::new();
                                                     for param in &function.params {
-                                                        if let swc::ast::Pat::Ident(ident) = &param.pat {
+                                                        if let swc_ecma_ast::Pat::Ident(ident) = &param.pat {
                                                             if let Some(type_ann) = &ident.type_ann {
                                                                 let ts_type = &*type_ann.type_ann;
                                                                 let argument = 
@@ -110,11 +110,11 @@ fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>
     /* get imports */
     let mut imports = Vec::new();
     for item in &module.body {
-        if let swc::ast::ModuleItem::ModuleDecl(declaration) = item {
-            if let swc::ast::ModuleDecl::Import(import) = declaration {
+        if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
+            if let swc_ecma_ast::ModuleDecl::Import(import) = declaration {
                 let mut symbols = Vec::new();
                 for import_specifier in &import.specifiers {
-                    if let swc::ast::ImportSpecifier::Named(named_import_specifier) = import_specifier {
+                    if let swc_ecma_ast::ImportSpecifier::Named(named_import_specifier) = import_specifier {
                         symbols.push(named_import_specifier.local.sym.as_ref());
                     }
                 }
@@ -161,20 +161,20 @@ fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>
 
 fn ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType) -> String {
     match ts_type {
-        swc::ast::TsType::TsTypeRef(ts_type_ref) => {
-            if let swc::ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
+        swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
+            if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
                 format!("&{}", ident.sym)
             }
             else {
                 "".to_owned()
             }
         },
-        swc::ast::TsType::TsKeywordType(ts_keyword_type) => {
+        swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
             match ts_keyword_type.kind {
-                swc::ast::TsKeywordTypeKind::TsNumberKeyword => "f64",
-                swc::ast::TsKeywordTypeKind::TsBooleanKeyword => "bool",
-                swc::ast::TsKeywordTypeKind::TsStringKeyword => "&str",
-                swc::ast::TsKeywordTypeKind::TsBigIntKeyword => "i64",
+                swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword => "f64",
+                swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword => "bool",
+                swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => "&str",
+                swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword => "i64",
                 _ => ""
             }.to_owned()
         },
