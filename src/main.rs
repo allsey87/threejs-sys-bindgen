@@ -5,7 +5,7 @@ use std::path::Path;
 use std::collections::HashMap;
 
 mod swc;
-mod wasm_bindgen_writer;
+mod wb;
 
 // https://github.community/t5/How-to-use-Git-and-GitHub/How-can-I-download-a-specific-folder-from-a-GitHub-repo/td-p/88
 
@@ -13,97 +13,127 @@ fn main() -> std::io::Result<()> {
     let module = swc::parse_module(Path::new("threejs/core/Object3D.d.ts")).expect("Unable to parse module");
 
     let output = File::create("Object3D.rs").expect("Unable to create file");
-    let mut writer = wasm_bindgen_writer::WasmBindgenWriter::new(output);
+    let mut writer = wb::Writer::new(output);
     
-    let imports_grouped = process_imports(&module);
-    writer.write_use_statements(&imports_grouped)?;
+    let imports = process_imports(&module);
+    writer.write_use_statements(&imports)?;
 
     writer.writeln("use wasm_bindgen::prelude::*;")?;
 
-    //write!(&mut output, "#[wasm_bindgen(module = \"{}\")]\n", "threejs/core/Object3D.js");
-    //write!(&mut output, "extern \"C\" {{\n");
+    writer.writeln(&format!("#[wasm_bindgen(module = \"{}\")]\n", "threejs/core/Object3D.js"))?;
+    writer.writeln("extern \"C\" {{\n")?;
+    writer.set_indentation(1);
 
     for item in &module.body {
-        match item {
-            swc_ecma_ast::ModuleItem::ModuleDecl(declaration) => {
-                match declaration {
-                    swc_ecma_ast::ModuleDecl::ExportDecl(export) => {
-                        let export_decl = &export.decl;
-                        match export_decl {
-                            swc_ecma_ast::Decl::Class(class_declaration) => {
-                                if let Some(super_class) = &class_declaration.class.super_class {
-                                    if let swc_ecma_ast::Expr::Ident(_ident) = &**super_class {
-                                        //writeln!(&mut output, "#[wasm_bindgen(extends = {})]", ident.sym);    
-                                    }
-                                }
-                                let _this_type : &str = &class_declaration.ident.sym;
-                                //writeln!(&mut output, "pub type {};", this_type);
-                                //println!("{:?}", class_declaration.class.body);
-                                for class_member in &class_declaration.class.body {
-                                    match class_member {
-                                        swc_ecma_ast::ClassMember::Constructor(_constructor) => {
-                                            //writeln!(&mut output, "#[wasm_bindgen(constructor)]");
-                                            // TODO handle arguments (multiple constructors?)                                                
-                                            //writeln!(&mut output, "pub fn new() -> {};", this_type);
-                                        },
-                                        swc_ecma_ast::ClassMember::Method(class_method) => {
-                                            if class_method.kind == swc_ecma_ast::MethodKind::Method {
-                                                let function = &class_method.function;
-                                                if let swc_ecma_ast::PropName::Ident(_ident) = &class_method.key {
-                                                    /*
-                                                    writeln!(&mut output,
-                                                                "#[wasm_bindgen(method, js_name = {})]",
-                                                                ident.sym);
-                                                    */
-                                                    /* handle arguments */
-                                                    let mut arguments = String::new();
-                                                    for param in &function.params {
-                                                        if let swc_ecma_ast::Pat::Ident(ident) = &param.pat {
-                                                            if let Some(type_ann) = &ident.type_ann {
-                                                                let ts_type = &*type_ann.type_ann;
-                                                                let argument = 
-                                                                    format!("{}: {},",
-                                                                            ident.sym,
-                                                                            ts_to_rust_type_signature(ts_type));
-                                                                arguments.push_str(&argument);
-                                                            }
-                                                        }
-                                                    }
-                                                    /*
-                                                    writeln!(&mut output,
-                                                            "pub fn {}({});",
-                                                            ident.sym.to_snake_case(), arguments);
-                                                    */
-                                                }
-                                                else {
-                                                    panic!("unimplemented PropName");
-                                                }
-                                                
-                                                if let Some(_ts_return) = &function.return_type {
-                                                    //println!("ts return type = {}", "yupr");
-                                                }
-                                            }
-                                            else {
-                                                panic!("setters and getters not implemented yet!")
-                                            }
-                                            
-                                        },
-                                        _ => ()
-                                    }
-                                }
+        if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
+            if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
+                if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
+                    let class = process_class(class_declaration);
+                    writer.write_class(&class)?;
+                }
+            }
+        }
+    }
+    writer.set_indentation(0);
+    writer.writeln("}}\n")?;
+    Ok(())
+}
 
-                            },
-                            _ => ()
+fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
+    let class_name : &str = &class_declaration.ident.sym;
+    let mut super_class_name : Option<&str> = None;
+    if let Some(class) = &class_declaration.class.super_class {
+        if let swc_ecma_ast::Expr::Ident(ident) = &**class {
+            //writeln!(&mut output, "#[wasm_bindgen(extends = {})]", ident.sym);
+            super_class_name = Some(&ident.sym)
+        }
+    }
+    
+    //writeln!(&mut output, "pub type {};", this_type);
+    //println!("{:?}", class_declaration.class.body);
+    for class_member in &class_declaration.class.body {
+        match class_member {
+            swc_ecma_ast::ClassMember::Constructor(_constructor) => {
+                //writeln!(&mut output, "#[wasm_bindgen(constructor)]");
+                // TODO handle arguments (multiple constructors?)                                                
+                //writeln!(&mut output, "pub fn new() -> {};", this_type);
+            },
+            swc_ecma_ast::ClassMember::Method(class_method) => {
+                if class_method.kind == swc_ecma_ast::MethodKind::Method {
+                    let function = &class_method.function;
+                    if let swc_ecma_ast::PropName::Ident(_ident) = &class_method.key {
+                        /*
+                        writeln!(&mut output,
+                                    "#[wasm_bindgen(method, js_name = {})]",
+                                    ident.sym);
+                        */
+                        /* handle arguments */
+                        let mut arguments = String::new();
+                        for param in &function.params {
+                            if let swc_ecma_ast::Pat::Ident(ident) = &param.pat {
+                                if let Some(type_ann) = &ident.type_ann {
+                                    let ts_type = &*type_ann.type_ann;
+                                    let argument = 
+                                        format!("{}: {},",
+                                                ident.sym,
+                                                ts_to_rust_type_signature(ts_type, Some(class_name)));
+                                    arguments.push_str(&argument);
+                                }
+                            }
                         }
-                        //println!("{:?}", export);
-                    },
-                    _ => ()
+                        /*
+                        writeln!(&mut output,
+                                "pub fn {}({});",
+                                ident.sym.to_snake_case(), arguments);
+                        */
+                    }
+                    else {
+                        panic!("unimplemented PropName");
+                    }
+                    
+                    if let Some(_ts_return) = &function.return_type {
+                        //println!("ts return type = {}", "yupr");
+                    }
+                }
+                else {
+                    panic!("setters and getters not implemented yet!")
                 }
             },
             _ => ()
         }
     }
-    Ok(())
+    wb::ClassDesc::new("hello","greeting",vec![])
+}
+
+fn ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType, this_type: Option<&str>) -> String {
+    match ts_type {
+        swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
+            if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
+                format!("&{}", ident.sym)
+            }
+            else {
+                "".to_owned()
+            }
+        },
+        swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
+            match ts_keyword_type.kind {
+                swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword => "f64",
+                swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword => "bool",
+                swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => "&str",
+                swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword => "i64",
+                _ => ""
+            }.to_owned()
+        },
+        swc_ecma_ast::TsType::TsThisType(ts_this_type) => {
+            if let Some(class_name) = this_type {
+                class_name
+            }
+            else {
+                panic!("cannot resolve this type without class");
+            }.to_owned()
+        },
+        _ => "".to_owned()
+    }
 }
 
 fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>> {
@@ -157,27 +187,4 @@ fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>
         }
     }
     imports_grouped
-}
-
-fn ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType) -> String {
-    match ts_type {
-        swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
-            if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
-                format!("&{}", ident.sym)
-            }
-            else {
-                "".to_owned()
-            }
-        },
-        swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
-            match ts_keyword_type.kind {
-                swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword => "f64",
-                swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword => "bool",
-                swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => "&str",
-                swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword => "i64",
-                _ => ""
-            }.to_owned()
-        },
-        _ => "".to_owned()
-    }
 }
