@@ -25,7 +25,7 @@ fn main() -> std::io::Result<()> {
             if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
                 if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
                     let mod_attributes = 
-                        vec![(String::from("module"), Some(String::from("threejs/core/Object3D.js")))];
+                        vec![(String::from("module"), Some(String::from("\"threejs/core/Object3D.js\"")))];
                     let mod_class = process_class(class_declaration);
                     writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
                 }
