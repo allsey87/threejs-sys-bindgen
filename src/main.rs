@@ -1,4 +1,4 @@
-//use inflector::Inflector;
+use inflector::Inflector;
 
 use std::fs::File;
 use std::path::Path;
@@ -16,76 +16,93 @@ fn main() -> std::io::Result<()> {
     let mut writer = wb::Writer::new(output);
     
     let imports = process_imports(&module);
-    writer.write_use_statements(&imports)?;
+    writer.write_imports(&imports)?;
 
-    writer.writeln("use wasm_bindgen::prelude::*;")?;
-
-    writer.writeln(&format!("#[wasm_bindgen(module = \"{}\")]\n", "threejs/core/Object3D.js"))?;
-    writer.writeln("extern \"C\" {{\n")?;
-    writer.set_indentation(1);
+    writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
 
     for item in &module.body {
         if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
             if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
                 if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
-                    let class = process_class(class_declaration);
-                    writer.write_class(&class)?;
+                    let mod_attributes = 
+                        vec![(String::from("module"), Some(String::from("threejs/core/Object3D.js")))];
+                    let mod_class = process_class(class_declaration);
+                    writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
                 }
             }
         }
     }
-    writer.set_indentation(0);
-    writer.writeln("}}\n")?;
+  
+    /*
+    let fn_attributes = vec![("method", None), ("js_name", Some("someJsFunction"))];
+    let fn_name = "some_js_function";
+    let fn_arguments = vec![("this","&SomeClass"), ("that","u64")];
+    let fn_return_type = Some("&str");
+    let fn_desc = wb::FunctionDesc::new(fn_attributes, fn_name, fn_arguments, fn_return_type);
+    
+    let cls_attributes = vec![("extends", Some("SomeOtherClass"))];
+    let cls_name = "SomeClass";
+    let cls_methods = vec![fn_desc];
+    let cls_desc = wb::ClassDesc::new(cls_name, cls_attributes, cls_methods);
+
+    let mod_attributes = vec![("module", Some("\"threejs/core/Object3D.js\""))];
+    let mod_desc = wb::ModuleDesc::new(mod_attributes, cls_desc);
+
+    writer.write_module(&mod_desc)?;
+    */
     Ok(())
 }
 
 fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
-    let class_name : &str = &class_declaration.ident.sym;
-    let mut super_class_name : Option<&str> = None;
+    let cls_name = class_declaration.ident.sym.to_string();
+    let mut cls_attributes = Vec::new();
+    let mut cls_methods = Vec::new();
+    /* handle super class */
     if let Some(class) = &class_declaration.class.super_class {
         if let swc_ecma_ast::Expr::Ident(ident) = &**class {
-            //writeln!(&mut output, "#[wasm_bindgen(extends = {})]", ident.sym);
-            super_class_name = Some(&ident.sym)
+            cls_attributes.push((String::from("extends"), Some(ident.sym.to_string())));
         }
     }
-    
-    //writeln!(&mut output, "pub type {};", this_type);
-    //println!("{:?}", class_declaration.class.body);
+    /* handle methods */
     for class_member in &class_declaration.class.body {
         match class_member {
             swc_ecma_ast::ClassMember::Constructor(_constructor) => {
-                //writeln!(&mut output, "#[wasm_bindgen(constructor)]");
-                // TODO handle arguments (multiple constructors?)                                                
-                //writeln!(&mut output, "pub fn new() -> {};", this_type);
+                let fn_attributes = vec![(String::from("constructor"), None)];
+                let fn_name = String::from("new");
+                let fn_arguments = vec![];
+                let fn_return_type = Some(cls_name.clone());
+                let fn_desc = 
+                    wb::FunctionDesc::new(
+                        fn_attributes,
+                        fn_name,
+                        fn_arguments,
+                        fn_return_type);
+                cls_methods.push(fn_desc);
             },
             swc_ecma_ast::ClassMember::Method(class_method) => {
                 if class_method.kind == swc_ecma_ast::MethodKind::Method {
                     let function = &class_method.function;
-                    if let swc_ecma_ast::PropName::Ident(_ident) = &class_method.key {
-                        /*
-                        writeln!(&mut output,
-                                    "#[wasm_bindgen(method, js_name = {})]",
-                                    ident.sym);
-                        */
+                    if let swc_ecma_ast::PropName::Ident(ident) = &class_method.key {
+                        let fn_attributes =
+                            vec![(String::from("method"), None), 
+                                 (String::from("js_name"), Some(ident.sym.to_string()))];
+                        let fn_name = ident.sym.to_snake_case();
+                        let fn_arguments = vec![];
+                        let fn_return_type = None;
+                        let fn_desc = 
+                            wb::FunctionDesc::new(fn_attributes,
+                                                  fn_name,
+                                                  fn_arguments,
+                                                  fn_return_type);
+                        cls_methods.push(fn_desc);
                         /* handle arguments */
-                        let mut arguments = String::new();
                         for param in &function.params {
                             if let swc_ecma_ast::Pat::Ident(ident) = &param.pat {
                                 if let Some(type_ann) = &ident.type_ann {
-                                    let ts_type = &*type_ann.type_ann;
-                                    let argument = 
-                                        format!("{}: {},",
-                                                ident.sym,
-                                                ts_to_rust_type_signature(ts_type, Some(class_name)));
-                                    arguments.push_str(&argument);
+                                    let _ts_type = &*type_ann.type_ann;
                                 }
                             }
                         }
-                        /*
-                        writeln!(&mut output,
-                                "pub fn {}({});",
-                                ident.sym.to_snake_case(), arguments);
-                        */
                     }
                     else {
                         panic!("unimplemented PropName");
@@ -102,10 +119,10 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
             _ => ()
         }
     }
-    wb::ClassDesc::new("hello","greeting",vec![])
+    wb::ClassDesc::new(cls_name, cls_attributes, cls_methods)
 }
 
-fn ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType, this_type: Option<&str>) -> String {
+fn _ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType, this_type: Option<&str>) -> String {
     match ts_type {
         swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
             if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
@@ -124,7 +141,7 @@ fn ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType, this_type: Option<&
                 _ => ""
             }.to_owned()
         },
-        swc_ecma_ast::TsType::TsThisType(ts_this_type) => {
+        swc_ecma_ast::TsType::TsThisType(_) => {
             if let Some(class_name) = this_type {
                 class_name
             }
