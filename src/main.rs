@@ -10,9 +10,9 @@ mod wb;
 // https://github.community/t5/How-to-use-Git-and-GitHub/How-can-I-download-a-specific-folder-from-a-GitHub-repo/td-p/88
 
 fn main() -> std::io::Result<()> {
-    let module = swc::parse_module(Path::new("threejs/core/Object3D.d.ts")).expect("Unable to parse module");
+    let module = swc::parse_module(Path::new("threejs/core/InstancedBufferAttribute.d.ts")).expect("Unable to parse module");
 
-    let output = File::create("Object3D.rs").expect("Unable to create file");
+    let output = File::create("InstancedBufferAttribute.rs").expect("Unable to create file");
     let mut writer = wb::Writer::new(output);
     
     let imports = process_imports(&module);
@@ -53,6 +53,122 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+enum RsType {
+    RsSelf,
+    RsF64,
+    RsBool,
+    RsStr,
+    RsI64,
+    RsClass(String),
+}
+
+impl ToString for RsType {
+    fn to_string(&self) -> String {
+        match self {
+            RsType::RsSelf => String::from("Self"),
+            RsType::RsF64 => String::from("f64"),
+            RsType::RsBool => String::from("bool"),
+            RsType::RsStr => String::from("str"),
+            RsType::RsI64 => String::from("i64"),
+            RsType::RsClass(name) => name.clone(),
+        }
+    }
+}
+
+fn process_type(ts_type: &swc_ecma_ast::TsType) -> RsType {
+    match ts_type {
+        swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
+            if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
+                RsType::RsClass(ident.sym.to_string())
+            }
+            else {
+                panic!("TsTypeRef identifer missing");
+            }
+        },
+        swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
+            match ts_keyword_type.kind {
+                swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword =>
+                    RsType::RsF64,
+                swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword =>
+                    RsType::RsBool,
+                swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => 
+                    RsType::RsStr,
+                swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword =>
+                    RsType::RsI64,
+                _ => {
+                    panic!("Unimplemented TsKeywordType");
+                }
+            }
+        },
+        swc_ecma_ast::TsType::TsThisType(_) => {
+            RsType::RsSelf
+        },
+        _ => {
+            panic!("Unimplemented TsType");
+        }
+    }
+}
+
+fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, RsType, bool) {
+    if let swc_ecma_ast::Pat::Ident(identifier) = &parameter.pat {
+        let name = identifier.sym.to_snake_case();
+        if let Some(ts_type) = &identifier.type_ann {
+            (name, process_type(&ts_type.type_ann), identifier.optional)
+        }
+        else {
+            panic!("Type annotation missing")
+        }
+    }
+    else {
+        panic!("Parameter did not have an identifier")
+    }
+}
+
+fn process_function(name: &str,
+                    class_name: Option<&str>,
+                    attributes: Vec<(String, Option<String>)>,
+                    parameters: &[&swc_ecma_ast::Param],
+                    return_type: &Option<&swc_ecma_ast::TsType>) -> wb::FunctionDesc {
+    /* process the parameters */
+    let mut fn_arguments = Vec::with_capacity(parameters.len());
+    for parameter in parameters {
+        let param = process_parameter(parameter);
+        let param_typename = if let RsType::RsSelf = param.1 {
+            if let Some(class_name) = class_name {
+                class_name.to_owned()
+            }
+            else {
+                String::from("Self")
+            }
+        }
+        else {
+            param.1.to_string()
+        };
+        fn_arguments.push((param.0, param_typename));
+    }
+    let fn_return_type = match return_type {
+        Some(return_type) => {
+            let return_type = process_type(return_type);
+            if let RsType::RsSelf = return_type {
+                if let Some(class_name) = &class_name {
+                    Some(format!("{}", class_name))
+                }
+                else {
+                    Some(return_type.to_string())
+                }
+            }
+            else {
+                Some(return_type.to_string())
+            }
+        },
+        None => None,
+    };
+    wb::FunctionDesc::new(attributes,
+                          name.to_owned(),
+                          fn_arguments,
+                          fn_return_type)
+}
+
 fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
     let cls_name = class_declaration.ident.sym.to_string();
     let mut cls_attributes = Vec::new();
@@ -66,17 +182,29 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
     /* handle methods */
     for class_member in &class_declaration.class.body {
         match class_member {
-            swc_ecma_ast::ClassMember::Constructor(_constructor) => {
+            swc_ecma_ast::ClassMember::Constructor(constructor) => {
                 let fn_attributes = vec![(String::from("constructor"), None)];
                 let fn_name = String::from("new");
-                let fn_arguments = vec![];
-                let fn_return_type = Some(cls_name.clone());
-                let fn_desc = 
-                    wb::FunctionDesc::new(
-                        fn_attributes,
-                        fn_name,
-                        fn_arguments,
-                        fn_return_type);
+                let fn_parameters : Vec<&swc_ecma_ast::Param> = constructor.params
+                    .iter()
+                    .filter_map(|p| match p {
+                        swc_ecma_ast::ParamOrTsParamProp::Param(param) => Some(param),
+                        _ => None,
+                    })
+                    .collect();
+                let fn_return_type = Some(
+                    &swc_ecma_ast::TsType::TsThisType(
+                        swc_ecma_ast::TsThisType {
+                            span: swc_common::DUMMY_SP
+                        }
+                    )
+                );
+                let fn_desc = process_function(
+                    &fn_name,
+                    Some(&cls_name),
+                    fn_attributes,
+                    &fn_parameters,
+                    &fn_return_type);
                 cls_methods.push(fn_desc);
             },
             swc_ecma_ast::ClassMember::Method(class_method) => {
@@ -87,29 +215,26 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
                             vec![(String::from("method"), None), 
                                  (String::from("js_name"), Some(ident.sym.to_string()))];
                         let fn_name = ident.sym.to_snake_case();
-                        let fn_arguments = vec![];
-                        let fn_return_type = None;
-                        let fn_desc = 
-                            wb::FunctionDesc::new(fn_attributes,
-                                                  fn_name,
-                                                  fn_arguments,
-                                                  fn_return_type);
-                        cls_methods.push(fn_desc);
-                        /* handle arguments */
+                        let mut fn_parameters = Vec::with_capacity(function.params.len());
                         for param in &function.params {
-                            if let swc_ecma_ast::Pat::Ident(ident) = &param.pat {
-                                if let Some(type_ann) = &ident.type_ann {
-                                    let _ts_type = &*type_ann.type_ann;
-                                }
-                            }
+                            fn_parameters.push(param);
                         }
+                        let fn_return_type = match &function.return_type {
+                            Some(fn_return_type) => {
+                                Some(&*fn_return_type.type_ann)
+                            },
+                            None => None
+                        };
+                        let fn_desc =
+                            process_function(&fn_name,
+                                             Some(&cls_name),
+                                             fn_attributes,
+                                             &fn_parameters,
+                                             &fn_return_type);
+                        cls_methods.push(fn_desc);
                     }
                     else {
                         panic!("unimplemented PropName");
-                    }
-                    
-                    if let Some(_ts_return) = &function.return_type {
-                        //println!("ts return type = {}", "yupr");
                     }
                 }
                 else {
@@ -120,37 +245,6 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
         }
     }
     wb::ClassDesc::new(cls_name, cls_attributes, cls_methods)
-}
-
-fn _ts_to_rust_type_signature(ts_type: &swc_ecma_ast::TsType, this_type: Option<&str>) -> String {
-    match ts_type {
-        swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
-            if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
-                format!("&{}", ident.sym)
-            }
-            else {
-                "".to_owned()
-            }
-        },
-        swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
-            match ts_keyword_type.kind {
-                swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword => "f64",
-                swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword => "bool",
-                swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => "&str",
-                swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword => "i64",
-                _ => ""
-            }.to_owned()
-        },
-        swc_ecma_ast::TsType::TsThisType(_) => {
-            if let Some(class_name) = this_type {
-                class_name
-            }
-            else {
-                panic!("cannot resolve this type without class");
-            }.to_owned()
-        },
-        _ => "".to_owned()
-    }
 }
 
 fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>> {
