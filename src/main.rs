@@ -9,6 +9,15 @@ mod wb;
 
 // https://github.community/t5/How-to-use-Git-and-GitHub/How-can-I-download-a-specific-folder-from-a-GitHub-repo/td-p/88
 
+// TODOs
+// start walking directories
+// handle references
+// handle optional arguments (done)
+// handle complex types, arrays, callbacks
+
+// for the generator library : use build script to pull in the ts files
+// for the output library: use build script to pull in the js files
+
 fn main() -> std::io::Result<()> {
     let module = swc::parse_module(Path::new("threejs/core/InstancedBufferAttribute.d.ts")).expect("Unable to parse module");
 
@@ -32,54 +41,14 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
-  
-    /*
-    let fn_attributes = vec![("method", None), ("js_name", Some("someJsFunction"))];
-    let fn_name = "some_js_function";
-    let fn_arguments = vec![("this","&SomeClass"), ("that","u64")];
-    let fn_return_type = Some("&str");
-    let fn_desc = wb::FunctionDesc::new(fn_attributes, fn_name, fn_arguments, fn_return_type);
-    
-    let cls_attributes = vec![("extends", Some("SomeOtherClass"))];
-    let cls_name = "SomeClass";
-    let cls_methods = vec![fn_desc];
-    let cls_desc = wb::ClassDesc::new(cls_name, cls_attributes, cls_methods);
-
-    let mod_attributes = vec![("module", Some("\"threejs/core/Object3D.js\""))];
-    let mod_desc = wb::ModuleDesc::new(mod_attributes, cls_desc);
-
-    writer.write_module(&mod_desc)?;
-    */
     Ok(())
 }
 
-enum RsType {
-    RsSelf,
-    RsF64,
-    RsBool,
-    RsStr,
-    RsI64,
-    RsClass(String),
-}
-
-impl ToString for RsType {
-    fn to_string(&self) -> String {
-        match self {
-            RsType::RsSelf => String::from("Self"),
-            RsType::RsF64 => String::from("f64"),
-            RsType::RsBool => String::from("bool"),
-            RsType::RsStr => String::from("str"),
-            RsType::RsI64 => String::from("i64"),
-            RsType::RsClass(name) => name.clone(),
-        }
-    }
-}
-
-fn process_type(ts_type: &swc_ecma_ast::TsType) -> RsType {
+fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
     match ts_type {
         swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
             if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
-                RsType::RsClass(ident.sym.to_string())
+                wb::TypeDesc::RsStruct(ident.sym.to_string())
             }
             else {
                 panic!("TsTypeRef identifer missing");
@@ -88,20 +57,20 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> RsType {
         swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
             match ts_keyword_type.kind {
                 swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword =>
-                    RsType::RsF64,
+                    wb::TypeDesc::RsF64,
                 swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword =>
-                    RsType::RsBool,
+                    wb::TypeDesc::RsBool,
                 swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => 
-                    RsType::RsStr,
+                    wb::TypeDesc::RsStr,
                 swc_ecma_ast::TsKeywordTypeKind::TsBigIntKeyword =>
-                    RsType::RsI64,
+                    wb::TypeDesc::RsI64,
                 _ => {
                     panic!("Unimplemented TsKeywordType");
                 }
             }
         },
         swc_ecma_ast::TsType::TsThisType(_) => {
-            RsType::RsSelf
+            wb::TypeDesc::RsSelf
         },
         _ => {
             panic!("Unimplemented TsType");
@@ -109,11 +78,12 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> RsType {
     }
 }
 
-fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, RsType, bool) {
+fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, wb::ParamDesc) {
     if let swc_ecma_ast::Pat::Ident(identifier) = &parameter.pat {
-        let name = identifier.sym.to_snake_case();
         if let Some(ts_type) = &identifier.type_ann {
-            (name, process_type(&ts_type.type_ann), identifier.optional)
+            let name = identifier.sym.to_snake_case();
+            let type_desc = process_type(&ts_type.type_ann);
+            (name, wb::ParamDesc::new(type_desc, false, identifier.optional))
         }
         else {
             panic!("Type annotation missing")
@@ -125,42 +95,16 @@ fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, RsType, bool) 
 }
 
 fn process_function(name: &str,
-                    class_name: Option<&str>,
                     attributes: Vec<(String, Option<String>)>,
                     parameters: &[&swc_ecma_ast::Param],
                     return_type: &Option<&swc_ecma_ast::TsType>) -> wb::FunctionDesc {
     /* process the parameters */
-    let mut fn_arguments = Vec::with_capacity(parameters.len());
-    for parameter in parameters {
-        let param = process_parameter(parameter);
-        let param_typename = if let RsType::RsSelf = param.1 {
-            if let Some(class_name) = class_name {
-                class_name.to_owned()
-            }
-            else {
-                String::from("Self")
-            }
-        }
-        else {
-            param.1.to_string()
-        };
-        fn_arguments.push((param.0, param_typename));
-    }
+    let fn_arguments : Vec<(String, wb::ParamDesc)> = 
+        parameters.iter().map(|p| process_parameter(p)).collect();
+    /* process return type */
     let fn_return_type = match return_type {
-        Some(return_type) => {
-            let return_type = process_type(return_type);
-            if let RsType::RsSelf = return_type {
-                if let Some(class_name) = &class_name {
-                    Some(format!("{}", class_name))
-                }
-                else {
-                    Some(return_type.to_string())
-                }
-            }
-            else {
-                Some(return_type.to_string())
-            }
-        },
+        /* hack: to be resolved once all ts types are implemented and we know how to handle references */
+        Some(return_type) => Some(wb::ParamDesc::new(process_type(return_type), false, false)),
         None => None,
     };
     wb::FunctionDesc::new(attributes,
@@ -201,7 +145,6 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
                 );
                 let fn_desc = process_function(
                     &fn_name,
-                    Some(&cls_name),
                     fn_attributes,
                     &fn_parameters,
                     &fn_return_type);
@@ -227,7 +170,6 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
                         };
                         let fn_desc =
                             process_function(&fn_name,
-                                             Some(&cls_name),
                                              fn_attributes,
                                              &fn_parameters,
                                              &fn_return_type);
@@ -247,6 +189,9 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
     wb::ClassDesc::new(cls_name, cls_attributes, cls_methods)
 }
 
+// This function is doing both scanning of the AST and formatting
+// TODO: Move to the string generation into the wb module
+// TODO: Create some intermediate type such as UseDesc that has a vector of symbols and a path
 fn process_imports(module: &swc_ecma_ast::Module) -> HashMap<String, Vec<String>> {
     /* get imports */
     let mut imports = Vec::new();

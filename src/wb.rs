@@ -1,18 +1,56 @@
 use std::io::{BufWriter, Write};
 use std::collections::HashMap;
 
+pub enum TypeDesc {
+    RsSelf,
+    RsF64,
+    RsBool,
+    RsStr,
+    RsI64,
+    RsStruct(String),
+}
+
+impl ToString for TypeDesc {
+    fn to_string(&self) -> String {
+        match self {
+            TypeDesc::RsSelf => String::from("Self"),
+            TypeDesc::RsF64 => String::from("f64"),
+            TypeDesc::RsBool => String::from("bool"),
+            TypeDesc::RsStr => String::from("str"),
+            TypeDesc::RsI64 => String::from("i64"),
+            TypeDesc::RsStruct(identifier) => identifier.clone(),
+        }
+    }
+}
+
+pub struct ParamDesc {
+    type_desc: TypeDesc,
+    reference: bool,
+    optional: bool,
+}
+
+impl ParamDesc {
+    pub fn new(type_desc : TypeDesc, reference : bool, optional: bool) -> ParamDesc {
+        ParamDesc {
+            type_desc: type_desc,
+            reference: reference,
+            optional: optional,
+        }
+    }
+}
+
 pub struct FunctionDesc {
     attributes: Vec<(String, Option<String>)>,
     name: String,
-    arguments: Vec<(String, String)>,
-    return_type: Option<String>,
+    arguments: Vec<(String, ParamDesc)>,
+    return_type: Option<ParamDesc>,
 }
 
 impl FunctionDesc {
     pub fn new(attributes: Vec<(String, Option<String>)>,
                name: String,
-               arguments: Vec<(String, String)>,
-               return_type: Option<String>) -> FunctionDesc {
+               arguments: Vec<(String, ParamDesc)>,
+               return_type: Option<ParamDesc>) -> FunctionDesc {
         FunctionDesc {
             attributes: attributes,
             name: name,
@@ -53,6 +91,12 @@ impl ModuleDesc {
             class: class
         }
     }
+}
+
+// TODO intermediate representation of use statements?
+pub struct UseDesc {
+    path: Vec<String>,
+    symbols: Vec<String>
 }
 
 pub struct Writer<W: Write> {
@@ -100,23 +144,59 @@ impl<W> Writer<W> where W: Write {
         }
     }
 
-    pub fn write_function(&mut self, function: &FunctionDesc) -> std::io::Result<()> {
+    pub fn write_function(&mut self, function: &FunctionDesc, class: Option<&ClassDesc>) -> std::io::Result<()> {
         self.write_export(&function.attributes)?;
         let arguments = function.arguments.iter().fold(String::new(), |mut res, arg| {
             if !res.is_empty() {
                 res.push_str(", ");
             }
-            res.push_str(&arg.0);
-            res.push_str(": ");
-            res.push_str(&arg.1);
+            let rs_type = {
+                if let TypeDesc::RsSelf = arg.1.type_desc {
+                    if let Some(class) = class {
+                        class.class_name.clone()
+                    }
+                    else {
+                        panic!("write_function requires the class for methods");
+                    }
+                }
+                else {
+                    arg.1.type_desc.to_string()
+                }
+            };
+            let arg = match (arg.1.reference, arg.1.optional) {
+                (false, false) => format!("{}: {}", arg.0, rs_type),
+                (false, true) => format!("{}: Option<{}>", arg.0, rs_type),
+                (true, false) => format!("{}: &{}", arg.0, rs_type),
+                (true, true) => format!("{}: &Option<{}>", arg.0, rs_type),
+            };
+            res.push_str(&arg);
             res
         });
         let mut fn_str = format!("pub fn {}({})", function.name, arguments);
-        if let Some(return_type) = &function.return_type {
+        if let Some(rt) = &function.return_type {
             fn_str.push_str(" -> ");
-            fn_str.push_str(return_type);
+            let rs_type = {
+                if let TypeDesc::RsSelf = rt.type_desc {
+                    if let Some(class) = class {
+                        class.class_name.clone()
+                    }
+                    else {
+                        panic!("write_function requires the class for methods");
+                    }
+                }
+                else {
+                    rt.type_desc.to_string()
+                }
+            };           
+            let rt = match (rt.reference, rt.optional) {
+                (false, false) => format!("{}", rs_type),
+                (false, true) => format!("Option<{}>", rs_type),
+                (true, false) => format!("&{}", rs_type),
+                (true, true) => format!("&Option<{}>", rs_type),
+            };
+            fn_str.push_str(&rt);
         }
-        fn_str.push_str(";");
+        fn_str.push(';');
         self.write_line(&fn_str)
     }
 
@@ -126,7 +206,7 @@ impl<W> Writer<W> where W: Write {
         self.write_line(&class_decl)?;
         /* write class methods */
         for function in &class.methods {
-            self.write_function(function)?;
+            self.write_function(function, Some(class))?;
         }
         Ok(())
     }
