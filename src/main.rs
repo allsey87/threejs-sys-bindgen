@@ -48,7 +48,20 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
     match ts_type {
         swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
             if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
-                wb::TypeDesc::RsStruct(ident.sym.to_string())
+                /* handle interfaces? */
+                if ident.sym.eq_str_ignore_ascii_case("ArrayLike") {
+                    if let Some(params) = &ts_type_ref.type_params {
+                        let param = &params.params[0];
+                        let subtype = process_type(&*param);
+                        wb::TypeDesc::RsSlice(Box::new(subtype))
+                    }
+                    else {
+                        panic!("ArrayLike without type params?")
+                    }
+                }
+                else {
+                    wb::TypeDesc::RsStruct(ident.sym.to_string())
+                }
             }
             else {
                 panic!("TsTypeRef identifer missing");

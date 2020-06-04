@@ -2,11 +2,12 @@ use std::io::{BufWriter, Write};
 use std::collections::HashMap;
 
 pub enum TypeDesc {
-    RsSelf,
-    RsF64,
     RsBool,
-    RsStr,
+    RsF64,
     RsI64,
+    RsSelf,
+    RsStr,
+    RsSlice(Box<TypeDesc>),
     RsStruct(String),
 }
 
@@ -18,6 +19,7 @@ impl ToString for TypeDesc {
             TypeDesc::RsBool => String::from("bool"),
             TypeDesc::RsStr => String::from("str"),
             TypeDesc::RsI64 => String::from("i64"),
+            TypeDesc::RsSlice(inner) => format!("&[{}]", inner.to_string()),
             TypeDesc::RsStruct(identifier) => identifier.clone(),
         }
     }
