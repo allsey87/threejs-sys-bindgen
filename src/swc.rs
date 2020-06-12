@@ -1,26 +1,16 @@
 use swc_common::{errors::{ColorConfig, Handler},SourceMap,};
 use swc_ecma_parser::{lexer::Lexer, Parser, Session, SourceFileInput, Syntax, TsConfig};
-use std::path::Path;
-use std::sync::Arc;
+use std::{io, path, sync};
 
-pub fn parse_module(path: &Path) -> Result<swc_ecma_ast::Module, String> {
-    let source_map: Arc<SourceMap> = Default::default();
+pub fn parse_module(path: &path::Path) -> Result<swc_ecma_ast::Module, io::Error> {
+    let source_map: sync::Arc<SourceMap> = Default::default();
     let handler =
         Handler::with_tty_emitter(ColorConfig::Auto,
                                   true,
                                   false,
                                   Some(source_map.clone()));
     let session = Session { handler: &handler };
-    let source = source_map
-        .load_file(path)
-        .map_err(|error| {
-            if let Some(path) = path.to_str() {
-                format!("{}: {}", path, error.to_string())
-            }
-            else {
-                format!("{}", error.to_string())
-            }
-        })?;
+    let source = source_map.load_file(path)?;
     let lexer = Lexer::new(
         session,
         Syntax::Typescript(TsConfig {dts: true, ..Default::default()}),
@@ -29,15 +19,11 @@ pub fn parse_module(path: &Path) -> Result<swc_ecma_ast::Module, String> {
         None,
     );
     let mut parser = Parser::new_from(session, lexer);
-    parser
-        .parse_module()
-        .map_err(|error| {
-            if let Some(path) = path.to_str() {
-                format!("{}: {}", path, error.message())
-            }
-            else {
-                format!("{}", error.message())
-            }
-        })
+    parser.parse_module()
+          .map_err(|error| {
+              io::Error::new(io::ErrorKind::Other,
+                             format!("{:?}: {}", path.to_str(), error.message()))
+              
+          })
 }
 

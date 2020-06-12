@@ -2,33 +2,54 @@ use std::io::{BufWriter, Write};
 use std::collections::HashMap;
 
 pub enum TypeDesc {
-    RsBool,
-    RsF64,
-    RsI64,
-    RsSelf,
-    RsStr,
-    RsSlice(Box<TypeDesc>),
-    RsStruct(String),
+    TsAny,
+    TsBoolean,
+    TsNull,
+    TsNumber,
+    TsString,
+    TsThis,
+    TsVoid,
+    TsArray(Box<TypeDesc>),
+    TsClass(String),
+    TsUnion(Vec<TypeDesc>),
 }
 
+/*  implementing this trait on this type seems like it will
+    not make sense in the long run since the required string
+    depends on the context (return type vs parameter etc) */
 impl ToString for TypeDesc {
     fn to_string(&self) -> String {
         match self {
-            TypeDesc::RsSelf => String::from("Self"),
-            TypeDesc::RsF64 => String::from("f64"),
-            TypeDesc::RsBool => String::from("bool"),
-            TypeDesc::RsStr => String::from("str"),
-            TypeDesc::RsI64 => String::from("i64"),
-            TypeDesc::RsSlice(inner) => format!("&[{}]", inner.to_string()),
-            TypeDesc::RsStruct(identifier) => identifier.clone(),
+            TypeDesc::TsAny => String::from("JsValue"),
+            TypeDesc::TsBoolean => String::from("bool"),
+            TypeDesc::TsNull => panic!("Can not convert TsNull to string"),
+            TypeDesc::TsNumber => String::from("f64"),
+            // it may be more ergonomic to just use &str or string here
+            // &str is not an option since it is not supported by Option<&str>
+            // two options are Option<String> and Option<JsString>
+            TypeDesc::TsString => String::from("String"),
+            TypeDesc::TsThis => panic!("Can not convert TsThis to string!"),
+            TypeDesc::TsVoid => panic!("Can not convert TsVoid to string!"),            
+            TypeDesc::TsArray(inner_type) => {
+                if let TypeDesc::TsNumber = **inner_type {
+                    /* it seems more efficient to just pass a slice here */
+                    /* the glue code wraps the wasm memory buffer in a Float64Array for us */
+                    String::from("&[f64]")
+                }
+                else {
+                    String::from("js_sys::Array")
+                }
+            },
+            TypeDesc::TsClass(identifier) => identifier.clone(),
+            TypeDesc::TsUnion(_) => panic!("Can not convert TsUnion to string"),
         }
     }
 }
 
 pub struct ParamDesc {
-    type_desc: TypeDesc,
-    reference: bool,
-    optional: bool,
+    pub type_desc: TypeDesc,
+    pub reference: bool,
+    pub optional: bool,
 }
 
 impl ParamDesc {
@@ -42,10 +63,10 @@ impl ParamDesc {
 }
 
 pub struct FunctionDesc {
-    attributes: Vec<(String, Option<String>)>,
-    name: String,
-    arguments: Vec<(String, ParamDesc)>,
-    return_type: Option<ParamDesc>,
+    pub attributes: Vec<(String, Option<String>)>,
+    pub name: String,
+    pub arguments: Vec<(String, ParamDesc)>,
+    pub return_type: Option<ParamDesc>,
 }
 
 impl FunctionDesc {
@@ -63,9 +84,9 @@ impl FunctionDesc {
 }
 
 pub struct ClassDesc {
-    class_name: String,
-    attributes: Vec<(String, Option<String>)>,
-    methods: Vec<FunctionDesc>
+    pub class_name: String,
+    pub attributes: Vec<(String, Option<String>)>,
+    pub methods: Vec<FunctionDesc>
 }
 
 impl ClassDesc {
@@ -81,8 +102,8 @@ impl ClassDesc {
 }
 
 pub struct ModuleDesc {
-    attributes: Vec<(String, Option<String>)>,
-    class: ClassDesc,
+    pub attributes: Vec<(String, Option<String>)>,
+    pub class: ClassDesc,
 }
 
 impl ModuleDesc {
@@ -153,7 +174,7 @@ impl<W> Writer<W> where W: Write {
                 res.push_str(", ");
             }
             let rs_type = {
-                if let TypeDesc::RsSelf = arg.1.type_desc {
+                if let TypeDesc::TsThis = arg.1.type_desc {
                     if let Some(class) = class {
                         class.class_name.clone()
                     }
@@ -178,7 +199,7 @@ impl<W> Writer<W> where W: Write {
         if let Some(rt) = &function.return_type {
             fn_str.push_str(" -> ");
             let rs_type = {
-                if let TypeDesc::RsSelf = rt.type_desc {
+                if let TypeDesc::TsThis = rt.type_desc {
                     if let Some(class) = class {
                         class.class_name.clone()
                     }
