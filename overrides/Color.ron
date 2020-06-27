@@ -1,0 +1,87 @@
+{
+	"new": [
+		(
+			attributes: [
+				("constructor", None),
+			],
+			name: "from_color",
+			arguments: [
+				("color", (
+					type_desc: TsString,
+					reference: true,
+					optional: false,
+				))
+			],
+			return_type: Some((
+				type_desc: TsClass("Color"),
+				reference: false,
+				optional: false,
+			)),
+		),
+		(
+			attributes: [
+				("constructor", None),
+			],
+			name: "from_value",
+			arguments: [
+				("value", (
+					type_desc: TsNumber,
+					reference: false,
+					optional: false,
+				)),
+			],
+			return_type: Some((
+				type_desc: TsClass("Color"),
+				reference: false,
+				optional: false,
+			)),
+		),
+		(
+			attributes: [
+				("constructor", None),
+			],
+			name: "from_string",
+			arguments: [
+				("name", (
+					type_desc: TsString,
+					reference: true,
+					optional: false,
+				)),
+			],
+			return_type: Some((
+				type_desc: TsClass("Color"),
+				reference: false,
+				optional: false,
+			)),
+		),
+		(
+			attributes: [
+				("constructor", None),
+			],
+			name: "from_rgb",
+			arguments: [
+				("r", (
+					type_desc: TsNumber,
+					reference: false,
+					optional: false,
+				)),
+				("g", (
+					type_desc: TsNumber,
+					reference: false,
+					optional: false,
+				)),
+				("b", (
+					type_desc: TsNumber,
+					reference: false,
+					optional: false,
+				)),
+				
+			],
+			return_type: Some((
+				type_desc: TsClass("Color"),
+				reference: false,
+				optional: false,
+			)),
+		),
+	],
+}
