@@ -1,5 +1,6 @@
 use inflector::Inflector;
 use std::{fs, io, path, vec, collections::HashMap};
+use ron::ser::PrettyConfig;
 
 mod swc;
 mod wb;
@@ -11,6 +12,7 @@ mod wb;
 // handle references
 // handle optional arguments (done)
 // handle complex types, arrays, callbacks
+
 
 // for the generator library : use build script to pull in the ts files
 // for the output library: use build script to pull in the js files
@@ -72,41 +74,81 @@ impl Iterator for BindingsTargetIterator {
 }
 
 fn main() -> std::io::Result<()> {
-    if let Ok(iterator) = BindingsTargetIterator::new("threejs/math/") {
-        for ts_path in iterator {
-            let mut ts_path = ts_path?;
-            let ts_module = swc::parse_module(&ts_path)?;
-            let ts_file_name = 
-                ts_path.file_name()
-                       .and_then(|f| f.to_str())
-                       .ok_or(io::Error::new(io::ErrorKind::Other,
-                            "could not convert ts filename to string"))?
-                       .to_owned();
-            ts_path.pop();
-            let rs_path = path::Path::new("bindings").join(&ts_path);
+    let matches = clap::App::new("threejs-bindgen")
+    .version("1.0")
+    .author("Michael Allwright <allsey87@gmail.com>")
+    .about("Generate Rust bindings for the Three.js library")
+    .arg(clap::Arg::with_name("overrides")
+        .help("Set the overrides directory")
+        .long("overrides")
+        .short("o")
+        .takes_value(true)
+        .value_name("DIR"))
+    .arg(clap::Arg::with_name("paths")
+        .help("The paths to search")
+        .required(true)
+        .multiple(true))
+    .get_matches();
 
-            fs::create_dir_all(&rs_path)?;
-            let js_path = ts_path.join(ts_file_name.replace(".d.ts", ".js"));
-            let rs_path = rs_path.join(ts_file_name.replace(".d.ts", ".rs"));
+                    // Matrix4      // methods
+    let mut overrides : HashMap<String, HashMap<String, Vec<wb::FunctionDesc>>> = HashMap::new();
 
-            let mut writer = wb::Writer::new(fs::File::create(rs_path)?);          
-            let imports = process_imports(&ts_module);
-            writer.write_imports(&imports)?;
-            writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
+    if let Some(or_dir) = matches.value_of("overrides") {
+        for or_entry in fs::read_dir(or_dir)? {
+            let or_path = or_entry?.path();
+            let of_filestem = or_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or(io::Error::new(io::ErrorKind::Other,
+                     "could not convert ts filestem to string"))?
+                .to_owned();
+            let or_buf = fs::read(&or_path)?;
+            overrides.insert(of_filestem, ron::de::from_bytes(&or_buf).unwrap());
+        }
+    }
 
-            for item in &ts_module.body {
-                if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
-                    if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
-                        if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
-                            let js_module_str = 
-                                js_path.to_str()
-                                    .ok_or(io::Error::new(io::ErrorKind::Other,
-                                           "could not convert js filename to string"))?
-                                    .to_owned();
-                            let mod_attributes = 
-                                vec![(String::from("module"), Some(js_module_str))];
-                            let mod_class = process_class(class_declaration);
-                            writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
+    let paths : Vec<&str> = matches.values_of("paths").unwrap().collect();
+
+    for path in paths {
+        if let Ok(iterator) = BindingsTargetIterator::new(path) {
+            for ts_path in iterator {
+                let mut ts_path = ts_path?;
+                let ts_file_name = ts_path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .ok_or(io::Error::new(io::ErrorKind::Other,
+                           "could not convert ts filename to string"))?
+                    .to_owned();
+                
+                let (ts_module, comments) = swc::parse_module(&ts_path)?;
+                
+                ts_path.pop();
+                let rs_path = path::Path::new("bindings").join(&ts_path);
+   
+                fs::create_dir_all(&rs_path)?;
+                let js_path = ts_path.join(ts_file_name.replace(".d.ts", ".js"));
+                let rs_path = rs_path.join(ts_file_name.replace(".d.ts", ".rs"));
+
+                
+                let mut writer = wb::Writer::new(fs::File::create(rs_path)?, &overrides);          
+                let imports = process_imports(&ts_module);
+                writer.write_imports(&imports)?;
+                writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
+    
+                for item in &ts_module.body {
+                    if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
+                        if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
+                            if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
+                                let js_module_str = 
+                                    js_path.to_str()
+                                        .ok_or(io::Error::new(io::ErrorKind::Other,
+                                               "could not convert js filename to string"))?
+                                        .to_owned();
+                                let mod_attributes = 
+                                    vec![(String::from("module"), Some(js_module_str))];
+                                let mod_class = process_class(class_declaration, &comments);
+                                writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
+                            }
                         }
                     }
                 }
@@ -216,7 +258,7 @@ fn process_function(name: &str,
                     parameters: &[&swc_ecma_ast::Param],
                     return_type: &Option<&swc_ecma_ast::TsType>) -> wb::FunctionDesc {
     /* process the parameters */
-    let fn_arguments : Vec<(String, wb::ParamDesc)> = 
+    let fn_arguments : Vec<(String, wb::ParamDesc)> =
         parameters.iter().map(|p| process_parameter(p)).collect();
     /* process return type */
     if let Some(return_type) = return_type {
@@ -243,7 +285,9 @@ fn process_function(name: &str,
     }
 }
 
-fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
+fn process_class(class_declaration: &swc_ecma_ast::ClassDecl, 
+                 comments: &swc_common::comments::Comments) ->
+wb::ClassDesc {
     let cls_name = class_declaration.ident.sym.to_string();
     let mut cls_attributes = Vec::new();
     let mut cls_methods = Vec::new();
@@ -259,7 +303,8 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
             swc_ecma_ast::ClassMember::Constructor(constructor) => {
                 let fn_attributes = vec![(String::from("constructor"), None)];
                 let fn_name = String::from("new");
-                let fn_parameters : Vec<&swc_ecma_ast::Param> = constructor.params
+                let fn_parameters : Vec<&swc_ecma_ast::Param> = constructor
+                    .params
                     .iter()
                     .filter_map(|p| match p {
                         swc_ecma_ast::ParamOrTsParamProp::Param(param) => Some(param),
@@ -271,16 +316,23 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl) -> wb::ClassDesc {
                     fn_attributes,
                     &fn_parameters,
                     &None);
-                let fn_return_type = wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
+                let fn_return_type = 
+                    wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
                 fn_desc.return_type = Some(fn_return_type);
                 cls_methods.push(fn_desc);
             },
             swc_ecma_ast::ClassMember::Method(class_method) => {
                 if class_method.kind == swc_ecma_ast::MethodKind::Method {
+                    let fn_deprecated = comments
+                        .take_leading_comments(class_method.span.lo())
+                        .and_then(|mut v| v.pop())
+                        .and_then(|c| Some(c.text.contains("@deprecated")))
+                        .unwrap_or(false);
+                    if fn_deprecated {
+                        continue;
+                    }
                     let function = &class_method.function;
                     if let swc_ecma_ast::PropName::Ident(ident) = &class_method.key {
-                        /* check override */
-                        // let override: Vec<wb::FunctionDesc> = overrides[("class", "method")]
                         let fn_name = ident.sym.to_snake_case();
                         let mut fn_attributes = vec![(String::from("method"), None)];
                         if ident.sym.to_string() != fn_name {

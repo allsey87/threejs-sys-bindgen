@@ -1,6 +1,8 @@
 use std::io::{BufWriter, Write};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
+#[derive(Serialize, Deserialize, Debug)]
 pub enum TypeDesc {
     TsAny,
     TsBoolean,
@@ -41,11 +43,12 @@ impl ToString for TypeDesc {
                 }
             },
             TypeDesc::TsClass(identifier) => identifier.clone(),
-            TypeDesc::TsUnion(_) => panic!("Can not convert TsUnion to string"),
+            TypeDesc::TsUnion(inner_types) => panic!(format!("Can not convert TsUnion {:?} to string", inner_types)),
         }
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ParamDesc {
     pub type_desc: TypeDesc,
     pub reference: bool,
@@ -62,6 +65,7 @@ impl ParamDesc {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct FunctionDesc {
     pub attributes: Vec<(String, Option<String>)>,
     pub name: String,
@@ -83,6 +87,7 @@ impl FunctionDesc {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ClassDesc {
     pub class_name: String,
     pub attributes: Vec<(String, Option<String>)>,
@@ -101,6 +106,7 @@ impl ClassDesc {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ModuleDesc {
     pub attributes: Vec<(String, Option<String>)>,
     pub class: ClassDesc,
@@ -122,16 +128,18 @@ pub struct UseDesc {
     symbols: Vec<String>
 }
 
-pub struct Writer<W: Write> {
+pub struct Writer<'a, W: Write> {
     indentation: usize,
-    output: BufWriter<W>
+    output: BufWriter<W>,
+    overrides: &'a HashMap<String, HashMap<String, Vec<FunctionDesc>>>,
 }
 
-impl<W> Writer<W> where W: Write {
-    pub fn new(w: W) -> Writer<W> {
+impl<'a, W> Writer<'a, W> where W: Write {
+    pub fn new(w: W, o: &'a HashMap<String, HashMap<String, Vec<FunctionDesc>>>) -> Writer<W> {
         Writer {
             indentation: 0,
             output: BufWriter::new(w),
+            overrides: o,
         }
     }
 
@@ -228,8 +236,17 @@ impl<W> Writer<W> where W: Write {
         let class_decl = format!("pub type {};", class.class_name);
         self.write_line(&class_decl)?;
         /* write class methods */
+        let overrides = self.overrides.get(&class.class_name);
+
         for function in &class.methods {
-            self.write_function(function, Some(class))?;
+            if let Some(replacements) = overrides.and_then(|f| f.get(&function.name)) {
+                for replacement in replacements {
+                    self.write_function(replacement, Some(class))?;
+                }
+            }
+            else {
+                self.write_function(function, Some(class))?;
+            }
         }
         Ok(())
     }
