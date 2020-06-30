@@ -1,7 +1,7 @@
 use std::io::{self, BufWriter, Write};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TypeDesc {
@@ -25,14 +25,14 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
         match type_desc {
             TypeDesc::TsAny => Ok("JsValue"),
             TypeDesc::TsBoolean => Ok("bool"),
-            TypeDesc::TsNull => Err("Can not convert from \"null\""),
+            TypeDesc::TsNull => Err("cannot convert from null"),
             TypeDesc::TsNumber => Ok("f64"),
             // it may be more ergonomic to just use &str or string here
             // &str is not an option since it is not supported by Option<&str>
             // two options are Option<String> and Option<JsString>
             TypeDesc::TsString => Ok("String"),
-            TypeDesc::TsThis => Err("Can not convert from \"this\""),
-            TypeDesc::TsVoid => Err("Can not convert from \"void\""),
+            TypeDesc::TsThis => Err("cannot convert from this"),
+            TypeDesc::TsVoid => Err("cannot convert from void"),
             TypeDesc::TsArray(inner_type) => {
                 if let TypeDesc::TsNumber = **inner_type {
                     /* it seems more efficient to just pass a slice here */
@@ -44,7 +44,7 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
                 }
             },
             TypeDesc::TsClass(identifier) => Ok(&identifier),
-            TypeDesc::TsUnion(_) => Err("Can not convert from \"union\""),
+            TypeDesc::TsUnion(_) => Err("cannot convert from union"),
         }
     }
 }
@@ -142,7 +142,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
         self.indentation = indentation;
     }
 
-    pub fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+    pub fn write_line(&mut self, line: &str) -> io::Result<()> {
         let indentation = "    ".repeat(self.indentation);
         writeln!(&mut self.output,
                  "{}{}",
@@ -150,7 +150,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
                  line)
     }
 
-    pub fn write_export(&mut self, attributes: &[(String, Option<String>)]) -> std::io::Result<()> {
+    pub fn write_export(&mut self, attributes: &[(String, Option<String>)]) -> io::Result<()> {
         if attributes.is_empty() {
             self.write_line("#[wasm_bindgen]")
         }
@@ -170,7 +170,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
         }
     }
 
-    pub fn write_function(&mut self, function: &FunctionDesc, class: Option<&ClassDesc>) -> std::io::Result<()> {
+    pub fn write_function(&mut self, function: &FunctionDesc, class: Option<&ClassDesc>) -> io::Result<()> {
         self.write_export(&function.attributes)?;
         let arguments = function.arguments.iter().fold(String::new(), |mut res, arg| {
             if !res.is_empty() {
@@ -202,26 +202,29 @@ impl<'a, W> Writer<'a, W> where W: Write {
         });
         let mut fn_str = format!("pub fn {}({})", function.name, arguments);
         if let Some(rt) = &function.return_type {
-            fn_str.push_str(" -> ");
-            let rs_type = {
-                if let TypeDesc::TsThis = rt.type_desc {
+            let rs_type = match rt.type_desc {
+                TypeDesc::TsThis => {
                     if let Some(class) = class {
                         class.class_name.clone()
                     }
                     else {
                         panic!("write_function requires the class for methods");
                     }
+                },
+                TypeDesc::TsVoid => {
+                    panic!("TODO: Fix void return type")
                 }
-                else {
-                    //rt.type_desc.to_string()
-                    String::from("")
+                _ => {
+                    <&str>::try_from(&rt.type_desc)
+                        .expect(&format!("Cannot convert return type of {}", function.name))
+                        .to_owned()
                 }
             };           
             let rt = match (rt.reference, rt.optional) {
-                (false, false) => format!("{}", rs_type),
-                (false, true) => format!("Option<{}>", rs_type),
-                (true, false) => format!("&{}", rs_type),
-                (true, true) => format!("&Option<{}>", rs_type),
+                (false, false) => format!(" -> {}", rs_type),
+                (false, true) => format!(" -> Option<{}>", rs_type),
+                (true, false) => format!(" -> &{}", rs_type),
+                (true, true) => format!(" -> &Option<{}>", rs_type),
             };
             fn_str.push_str(&rt);
         }
@@ -229,7 +232,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
         self.write_line(&fn_str)
     }
 
-    pub fn write_class(&mut self, class: &ClassDesc) -> std::io::Result<()> {
+    pub fn write_class(&mut self, class: &ClassDesc) -> io::Result<()> {
         self.write_export(&class.attributes)?;
         let class_decl = format!("pub type {};", class.class_name);
         self.write_line(&class_decl)?;
@@ -249,7 +252,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
         Ok(())
     }
 
-    pub fn write_module(&mut self, module: &ModuleDesc) -> std::io::Result<()> {
+    pub fn write_module(&mut self, module: &ModuleDesc) -> io::Result<()> {
         self.write_export(&module.attributes)?;
         self.write_line("extern \"C\" {")?;
         self.set_indentation(1);
@@ -259,7 +262,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
         Ok(())
     }
 
-    pub fn write_imports(&mut self, statements: &HashMap<String, Vec<String>>) -> std::io::Result<()> {
+    pub fn write_imports(&mut self, statements: &HashMap<String, Vec<String>>) -> io::Result<()> {
         let mut imports = Vec::with_capacity(statements.len());
         for (path, symbols) in statements {
             let mut symbols = symbols.clone();
