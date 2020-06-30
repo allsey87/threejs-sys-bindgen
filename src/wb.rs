@@ -1,6 +1,7 @@
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
+use std::convert::{TryFrom, TryInto};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TypeDesc {
@@ -16,34 +17,34 @@ pub enum TypeDesc {
     TsUnion(Vec<TypeDesc>),
 }
 
-/*  implementing this trait on this type seems like it will
-    not make sense in the long run since the required string
-    depends on the context (return type vs parameter etc) */
-impl ToString for TypeDesc {
-    fn to_string(&self) -> String {
-        match self {
-            TypeDesc::TsAny => String::from("JsValue"),
-            TypeDesc::TsBoolean => String::from("bool"),
-            TypeDesc::TsNull => panic!("Can not convert TsNull to string"),
-            TypeDesc::TsNumber => String::from("f64"),
+// TODO try to use lifetimes here and avoid allocations
+impl<'a> TryFrom<&'a TypeDesc> for &'a str {
+    type Error = &'static str;
+
+    fn try_from(type_desc: &'a TypeDesc) -> Result<Self, Self::Error> {
+        match type_desc {
+            TypeDesc::TsAny => Ok("JsValue"),
+            TypeDesc::TsBoolean => Ok("bool"),
+            TypeDesc::TsNull => Err("Can not convert from \"null\""),
+            TypeDesc::TsNumber => Ok("f64"),
             // it may be more ergonomic to just use &str or string here
             // &str is not an option since it is not supported by Option<&str>
             // two options are Option<String> and Option<JsString>
-            TypeDesc::TsString => String::from("String"),
-            TypeDesc::TsThis => panic!("Can not convert TsThis to string!"),
-            TypeDesc::TsVoid => panic!("Can not convert TsVoid to string!"),            
+            TypeDesc::TsString => Ok("String"),
+            TypeDesc::TsThis => Err("Can not convert from \"this\""),
+            TypeDesc::TsVoid => Err("Can not convert from \"void\""),
             TypeDesc::TsArray(inner_type) => {
                 if let TypeDesc::TsNumber = **inner_type {
                     /* it seems more efficient to just pass a slice here */
                     /* the glue code wraps the wasm memory buffer in a Float64Array for us */
-                    String::from("&[f64]")
+                    Ok("&[f64]")
                 }
                 else {
-                    String::from("js_sys::Array")
+                    Ok("js_sys::Array")
                 }
             },
-            TypeDesc::TsClass(identifier) => identifier.clone(),
-            TypeDesc::TsUnion(inner_types) => panic!(format!("Can not convert TsUnion {:?} to string", inner_types)),
+            TypeDesc::TsClass(identifier) => Ok(&identifier),
+            TypeDesc::TsUnion(_) => Err("Can not convert from \"union\""),
         }
     }
 }
@@ -122,12 +123,6 @@ impl ModuleDesc {
     }
 }
 
-// TODO intermediate representation of use statements?
-pub struct UseDesc {
-    path: Vec<String>,
-    symbols: Vec<String>
-}
-
 pub struct Writer<'a, W: Write> {
     indentation: usize,
     output: BufWriter<W>,
@@ -191,7 +186,9 @@ impl<'a, W> Writer<'a, W> where W: Write {
                     }
                 }
                 else {
-                    arg.1.type_desc.to_string()
+                    <&str>::try_from(&arg.1.type_desc)
+                        .expect(&format!("Cannot convert parameter {} of {}", arg.0, function.name))
+                        .to_owned()
                 }
             };
             let arg = match (arg.1.reference, arg.1.optional) {
@@ -216,7 +213,8 @@ impl<'a, W> Writer<'a, W> where W: Write {
                     }
                 }
                 else {
-                    rt.type_desc.to_string()
+                    //rt.type_desc.to_string()
+                    String::from("")
                 }
             };           
             let rt = match (rt.reference, rt.optional) {

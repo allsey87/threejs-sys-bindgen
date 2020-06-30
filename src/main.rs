@@ -1,6 +1,5 @@
 use inflector::Inflector;
 use std::{fs, io, path, vec, collections::HashMap};
-use ron::ser::PrettyConfig;
 
 mod swc;
 mod wb;
@@ -158,6 +157,7 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+// TODO return results instead of panicking
 fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
     match ts_type {
         swc_ecma_ast::TsType::TsArrayType(ts_array_type) => {
@@ -207,15 +207,6 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
         swc_ecma_ast::TsType::TsThisType(_) => {
             wb::TypeDesc::TsThis
         },
-        // TODO: special case, return null or something => Option<Something>
-        // General case: generate x different functions?
-        // e.g., constructor( color?: Color | string | number );
-        // constructor( r: number, g: number, b: number );
-        // Color::from(other), Color::from("red"), Color::from(0x124235u16), Color::with_components(r,g,b)
-        // Create a configuration file that lists the classes/paths to be searched and bindings to be formed
-        // import statements could be used to figure out dependencies?
-        // add quirks to configuration file for removing optional_ prefixes, to_vector_3 to_vector3
-        // create high level example and start increasing complexity on a need-be basis
         swc_ecma_ast::TsType::TsUnionOrIntersectionType(variant) => {
             match variant {
                 swc_ecma_ast::TsUnionOrIntersectionType::TsUnionType(ts_union_type) => {
@@ -237,6 +228,7 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
     }
 }
 
+// TODO return result instead of panicking
 fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, wb::ParamDesc) {
     if let swc_ecma_ast::Pat::Ident(identifier) = &parameter.pat {
         if let Some(ts_type) = &identifier.type_ann {
