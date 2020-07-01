@@ -17,7 +17,6 @@ pub enum TypeDesc {
     TsUnion(Vec<TypeDesc>),
 }
 
-// TODO try to use lifetimes here and avoid allocations
 impl<'a> TryFrom<&'a TypeDesc> for &'a str {
     type Error = &'static str;
 
@@ -71,19 +70,19 @@ pub struct FunctionDesc {
     pub attributes: Vec<(String, Option<String>)>,
     pub name: String,
     pub arguments: Vec<(String, ParamDesc)>,
-    pub return_type: Option<ParamDesc>,
+    pub returns: Option<ParamDesc>,
 }
 
 impl FunctionDesc {
     pub fn new(attributes: Vec<(String, Option<String>)>,
                name: String,
                arguments: Vec<(String, ParamDesc)>,
-               return_type: Option<ParamDesc>) -> FunctionDesc {
+               returns: Option<ParamDesc>) -> FunctionDesc {
         FunctionDesc {
             attributes: attributes,
             name: name,
             arguments: arguments,
-            return_type: return_type,
+            returns: returns,
         }
     }
 }
@@ -201,7 +200,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
             res
         });
         let mut fn_str = format!("pub fn {}({})", function.name, arguments);
-        if let Some(rt) = &function.return_type {
+        if let Some(rt) = &function.returns {
             let rs_type = match rt.type_desc {
                 TypeDesc::TsThis => {
                     if let Some(class) = class {
@@ -211,9 +210,6 @@ impl<'a, W> Writer<'a, W> where W: Write {
                         panic!("write_function requires the class for methods");
                     }
                 },
-                TypeDesc::TsVoid => {
-                    panic!("TODO: Fix void return type")
-                }
                 _ => {
                     <&str>::try_from(&rt.type_desc)
                         .expect(&format!("Cannot convert return type of {}", function.name))

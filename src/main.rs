@@ -255,19 +255,27 @@ fn process_function(name: &str,
     /* process return type */
     if let Some(return_type) = return_type {
         let mut return_type = process_type(&return_type);
-        let mut optional = false;
-        /* handle special option case */
-        if let wb::TypeDesc::TsUnion(union) = &mut return_type {
-            if let [_, wb::TypeDesc::TsNull] = &union[..] {
-                return_type = union.remove(0);
-                optional = true;
-            }
+        if matches!(return_type, wb::TypeDesc::TsVoid) {
+            wb::FunctionDesc::new(attributes,
+                name.to_owned(),
+                fn_arguments,
+                None)
         }
-        let return_param = wb::ParamDesc::new(return_type, false, optional);
-        wb::FunctionDesc::new(attributes,
-            name.to_owned(),
-            fn_arguments,
-            Some(return_param))
+        else {
+            let mut optional = false;
+            /* handle special option case */
+            if let wb::TypeDesc::TsUnion(union) = &mut return_type {
+                if let [_, wb::TypeDesc::TsNull] = &union[..] {
+                    return_type = union.remove(0);
+                    optional = true;
+                }
+            }
+            let return_param = wb::ParamDesc::new(return_type, false, optional);
+            wb::FunctionDesc::new(attributes,
+                name.to_owned(),
+                fn_arguments,
+                Some(return_param))
+        }
     }
     else {
         wb::FunctionDesc::new(attributes,
@@ -310,7 +318,7 @@ wb::ClassDesc {
                     &None);
                 let fn_return_type = 
                     wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
-                fn_desc.return_type = Some(fn_return_type);
+                fn_desc.returns = Some(fn_return_type);
                 cls_methods.push(fn_desc);
             },
             swc_ecma_ast::ClassMember::Method(class_method) => {
