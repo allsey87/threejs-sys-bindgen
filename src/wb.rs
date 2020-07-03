@@ -12,6 +12,7 @@ pub enum TypeDesc {
     TsString,
     TsThis,
     TsVoid,
+    TsUndefined,
     TsArray(Box<TypeDesc>),
     TsClass(String),
     TsUnion(Vec<TypeDesc>),
@@ -32,6 +33,7 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
             TypeDesc::TsString => Ok("String"),
             TypeDesc::TsThis => Err("cannot convert from this"),
             TypeDesc::TsVoid => Err("cannot convert from void"),
+            TypeDesc::TsUndefined => Err("cannot convert from undefined"),
             TypeDesc::TsArray(inner_type) => {
                 if let TypeDesc::TsNumber = **inner_type {
                     /* it seems more efficient to just pass a slice here */

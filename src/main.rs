@@ -199,6 +199,8 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
                     Ok(wb::TypeDesc::TsAny),
                 swc_ecma_ast::TsKeywordTypeKind::TsVoidKeyword =>
                     Ok(wb::TypeDesc::TsVoid),
+                swc_ecma_ast::TsKeywordTypeKind::TsUndefinedKeyword =>
+                    Ok(wb::TypeDesc::TsUndefined),
                 _ => {
                     Err(format!("cannot process TsKeywordType::{:?}", ts_keyword_type.kind))
                 }
@@ -269,9 +271,12 @@ fn process_function(name: &str,
             let mut optional = false;
             /* handle special option case */
             if let wb::TypeDesc::TsUnion(union) = &mut return_type {
-                if let [_, wb::TypeDesc::TsNull] = &union[..] {
-                    return_type = union.remove(0);
-                    optional = true;
+                match &union[..] {
+                    [_, wb::TypeDesc::TsNull] | [_, wb::TypeDesc::TsUndefined] => {
+                        return_type = union.remove(0);
+                        optional = true;
+                    },
+                    _ => {}
                 }
             }
             let return_param = wb::ParamDesc::new(return_type, false, optional);
