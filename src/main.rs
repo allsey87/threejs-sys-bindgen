@@ -157,12 +157,12 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-// TODO return results instead of panicking
-fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
+fn process_type(ts_type: &swc_ecma_ast::TsType)
+    -> Result<wb::TypeDesc, String> {
     match ts_type {
         swc_ecma_ast::TsType::TsArrayType(ts_array_type) => {
-            let inner = process_type(&ts_array_type.elem_type);
-            wb::TypeDesc::TsArray(Box::new(inner))
+            let inner = process_type(&ts_array_type.elem_type)?;
+            Ok(wb::TypeDesc::TsArray(Box::new(inner)))
         },
         swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
             if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
@@ -170,96 +170,100 @@ fn process_type(ts_type: &swc_ecma_ast::TsType) -> wb::TypeDesc {
                 if ident.sym.eq_str_ignore_ascii_case("ArrayLike") {
                     if let Some(params) = &ts_type_ref.type_params {
                         let param = &params.params[0];
-                        let inner = process_type(&*param);
-                        wb::TypeDesc::TsArray(Box::new(inner))
+                        let inner = process_type(&*param)?;
+                        Ok(wb::TypeDesc::TsArray(Box::new(inner)))
                     }
                     else {
-                        panic!("ArrayLike without type params?")
+                        Err("ArrayLike without type annotations".to_owned())
                     }
                 }
                 else {
-                    wb::TypeDesc::TsClass(ident.sym.to_string())
+                    Ok(wb::TypeDesc::TsClass(ident.sym.to_string()))
                 }
             }
             else {
-                panic!("TsTypeRef identifer missing");
+                Err("TsType without an identifer".to_owned())
             }
         },
         swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
             match ts_keyword_type.kind {
                 swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword =>
-                    wb::TypeDesc::TsNumber,
+                    Ok(wb::TypeDesc::TsNumber),
                 swc_ecma_ast::TsKeywordTypeKind::TsNullKeyword => 
-                    wb::TypeDesc::TsNull,                    
+                    Ok(wb::TypeDesc::TsNull),
                 swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword =>
-                    wb::TypeDesc::TsBoolean,
+                    Ok(wb::TypeDesc::TsBoolean),
                 swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => 
-                    wb::TypeDesc::TsString,
+                    Ok(wb::TypeDesc::TsString),
                 swc_ecma_ast::TsKeywordTypeKind::TsAnyKeyword => 
-                    wb::TypeDesc::TsAny,
+                    Ok(wb::TypeDesc::TsAny),
                 swc_ecma_ast::TsKeywordTypeKind::TsVoidKeyword =>
-                    wb::TypeDesc::TsVoid,
+                    Ok(wb::TypeDesc::TsVoid),
                 _ => {
-                    panic!(format!("TsKeywordType::{:?} is not implemented", ts_keyword_type));
+                    Err(format!("cannot process TsKeywordType::{:?}", ts_keyword_type.kind))
                 }
             }
         },
         swc_ecma_ast::TsType::TsThisType(_) => {
-            wb::TypeDesc::TsThis
+            Ok(wb::TypeDesc::TsThis)
         },
         swc_ecma_ast::TsType::TsUnionOrIntersectionType(variant) => {
             match variant {
                 swc_ecma_ast::TsUnionOrIntersectionType::TsUnionType(ts_union_type) => {
                     let mut ts_types = Vec::with_capacity(ts_union_type.types.len());
                     for ts_type in &ts_union_type.types {
-                        ts_types.push(process_type(&**ts_type));
+                        ts_types.push(process_type(&**ts_type)?);
                     }
-                    wb::TypeDesc::TsUnion(ts_types)
+                    Ok(wb::TypeDesc::TsUnion(ts_types))
                 },
                 swc_ecma_ast::TsUnionOrIntersectionType::TsIntersectionType(ts_intersection_type) => {
-                    panic!(format!("TsIntersectionType::{:?} is not implemented", ts_intersection_type));
+                    Err(format!("cannot process TsIntersectionType::{{{:?}}}", ts_intersection_type.types))
                 }
             }
         },
 
         _ => {
-            panic!(format!("TsType::{:?} is not implemented", ts_type));
+            Err(format!("cannot process TsType::{:?}", ts_type))
         }
     }
 }
 
-// TODO return result instead of panicking
-fn process_parameter(parameter: &swc_ecma_ast::Param) -> (String, wb::ParamDesc) {
+fn process_parameter(parameter: &swc_ecma_ast::Param)
+    -> Result<(String, wb::ParamDesc), String> {
     if let swc_ecma_ast::Pat::Ident(identifier) = &parameter.pat {
         if let Some(ts_type) = &identifier.type_ann {
             let name = identifier.sym.to_snake_case();
-            let type_desc = process_type(&ts_type.type_ann);
-            (name, wb::ParamDesc::new(type_desc, false, identifier.optional))
+            let type_desc = process_type(&ts_type.type_ann)?;
+            Ok((name, wb::ParamDesc::new(type_desc, false, identifier.optional)))
         }
         else {
-            panic!("Missing type annotation for parameter")
+            Err("cannot process parameter without type annotation".to_owned())
         }
     }
     else {
-        panic!("Missing identifier for parameter")
+        Err("cannot process parameter without identifier".to_owned())
     }
 }
 
 fn process_function(name: &str,
                     attributes: Vec<(String, Option<String>)>,
                     parameters: &[&swc_ecma_ast::Param],
-                    return_type: &Option<&swc_ecma_ast::TsType>) -> wb::FunctionDesc {
+                    return_type: &Option<&swc_ecma_ast::TsType>)
+    -> Result<wb::FunctionDesc, String> {
     /* process the parameters */
-    let fn_arguments : Vec<(String, wb::ParamDesc)> =
-        parameters.iter().map(|p| process_parameter(p)).collect();
+    let fn_arguments = parameters
+        .iter()
+        .map(|p| process_parameter(p))
+        .collect::<Result<Vec<_>, _>>()?;
     /* process return type */
     if let Some(return_type) = return_type {
-        let mut return_type = process_type(&return_type);
+        let mut return_type = process_type(&return_type)?;
+        // TODO do not filter out TsVoid here
         if matches!(return_type, wb::TypeDesc::TsVoid) {
-            wb::FunctionDesc::new(attributes,
+            Ok(wb::FunctionDesc::new(attributes,
                 name.to_owned(),
                 fn_arguments,
-                None)
+                None))
         }
         else {
             let mut optional = false;
@@ -271,23 +275,22 @@ fn process_function(name: &str,
                 }
             }
             let return_param = wb::ParamDesc::new(return_type, false, optional);
-            wb::FunctionDesc::new(attributes,
+            Ok(wb::FunctionDesc::new(attributes,
                 name.to_owned(),
                 fn_arguments,
-                Some(return_param))
+                Some(return_param)))
         }
     }
     else {
-        wb::FunctionDesc::new(attributes,
+        Ok(wb::FunctionDesc::new(attributes,
             name.to_owned(),
             fn_arguments,
-            None)
+            None))
     }
 }
 
 fn process_class(class_declaration: &swc_ecma_ast::ClassDecl, 
-                 comments: &swc_common::comments::Comments) ->
-wb::ClassDesc {
+                 comments: &swc_common::comments::Comments) -> wb::ClassDesc {
     let cls_name = class_declaration.ident.sym.to_string();
     let mut cls_attributes = Vec::new();
     let mut cls_methods = Vec::new();
@@ -311,15 +314,19 @@ wb::ClassDesc {
                         _ => None,
                     })
                     .collect();
-                let mut fn_desc = process_function(
-                    &fn_name,
-                    fn_attributes,
-                    &fn_parameters,
-                    &None);
-                let fn_return_type = 
-                    wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
-                fn_desc.returns = Some(fn_return_type);
-                cls_methods.push(fn_desc);
+                let fn_desc = 
+                    process_function(&fn_name, fn_attributes, &fn_parameters, &None);
+                match fn_desc {
+                    Ok(mut fn_desc) => {
+                        let fn_return_type = 
+                            wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
+                            fn_desc.returns = Some(fn_return_type);
+                        cls_methods.push(fn_desc);
+                    },
+                    Err(error) => {
+                        panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                    }
+                }
             },
             swc_ecma_ast::ClassMember::Method(class_method) => {
                 if class_method.kind == swc_ecma_ast::MethodKind::Method {
@@ -348,21 +355,19 @@ wb::ClassDesc {
                             },
                             None => None
                         };
-                        let mut fn_desc =
-                            process_function(&fn_name,
-                                             fn_attributes,
-                                             &fn_parameters,
-                                             &fn_return_type);
-                        let this_param = wb::ParamDesc::new(wb::TypeDesc::TsThis, true, false);
-                        fn_desc.arguments.insert(0, (String::from("this"), this_param));
-                        cls_methods.push(fn_desc);
+                        let fn_desc =
+                            process_function(&fn_name, fn_attributes, &fn_parameters, &fn_return_type);
+                        match fn_desc {
+                            Ok(mut fn_desc) => {
+                                let this_param = wb::ParamDesc::new(wb::TypeDesc::TsThis, true, false);
+                                fn_desc.arguments.insert(0, (String::from("this"), this_param));
+                                cls_methods.push(fn_desc);
+                            },
+                            Err(error) => {
+                                panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                            }
+                        }
                     }
-                    else {
-                        panic!("unimplemented PropName");
-                    }
-                }
-                else {
-                    panic!("setters and getters not implemented yet!")
                 }
             },
             _ => ()
