@@ -14,6 +14,7 @@ pub enum TypeDesc {
     TsVoid,
     TsUndefined,
     TsArray(Box<TypeDesc>),
+    TsFunction(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
     TsClass(String),
     TsUnion(Vec<TypeDesc>),
 }
@@ -44,6 +45,7 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
                     Ok("js_sys::Array")
                 }
             },
+            TypeDesc::TsFunction(_,_) => Err("cannot convert from function"),
             TypeDesc::TsClass(identifier) => Ok(&identifier),
             TypeDesc::TsUnion(_) => Err("cannot convert from union"),
         }

@@ -223,7 +223,32 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
                 }
             }
         },
-
+        swc_ecma_ast::TsType::TsFnOrConstructorType(fn_or_constructor) => {
+            if let swc_ecma_ast::TsFnOrConstructorType::TsFnType(function) = fn_or_constructor {
+                let fn_parameters = function.params
+                    .iter()
+                    .try_fold(Vec::with_capacity(function.params.len()), |mut vec, param| {
+                        if let swc_ecma_ast::TsFnParam::Ident(ident) = param {
+                            if let Some(type_ann) = &ident.type_ann {
+                                let fn_param_type_desc = process_type(&type_ann.type_ann)?;
+                                vec.push((ident.sym.to_snake_case(), fn_param_type_desc));
+                                Ok(vec)
+                            }
+                            else {
+                                Err(format!("TsFnOrConstructorType: {}", ident.sym))
+                            }
+                        }
+                        else {
+                            Err(format!("TsFnOrConstructorType"))
+                        }
+                    })?;
+                let fn_return_type = Box::new(process_type(&function.type_ann.type_ann)?);
+                Ok(wb::TypeDesc::TsFunction(fn_parameters, Some(fn_return_type)))
+            }
+            else {
+                Err(format!("cannot process TsType::{:?}", ts_type))
+            }
+        },
         _ => {
             Err(format!("cannot process TsType::{:?}", ts_type))
         }
