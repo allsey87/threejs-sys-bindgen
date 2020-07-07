@@ -17,6 +17,7 @@ pub enum TypeDesc {
     TsFunction(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
     TsClass(String),
     TsUnion(Vec<TypeDesc>),
+    Unimplemented,
 }
 
 impl<'a> TryFrom<&'a TypeDesc> for &'a str {
@@ -35,6 +36,7 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
             TypeDesc::TsThis => Err("cannot convert from this"),
             TypeDesc::TsVoid => Err("cannot convert from void"),
             TypeDesc::TsUndefined => Err("cannot convert from undefined"),
+            TypeDesc::Unimplemented => Err("type not implemented"),
             TypeDesc::TsArray(inner_type) => {
                 if let TypeDesc::TsNumber = **inner_type {
                     /* it seems more efficient to just pass a slice here */
@@ -45,7 +47,7 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
                     Ok("js_sys::Array")
                 }
             },
-            TypeDesc::TsFunction(_,_) => Err("cannot convert from function"),
+            TypeDesc::TsFunction(_, _) => Ok("js_sys::Function"),
             TypeDesc::TsClass(identifier) => Ok(&identifier),
             TypeDesc::TsUnion(_) => Err("cannot convert from union"),
         }

@@ -137,13 +137,20 @@ fn main() -> std::io::Result<()> {
                 for item in &ts_module.body {
                     if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
                         if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
+                            if comments
+                                .take_leading_comments(export.span.lo())
+                                .and_then(|mut v| v.pop())
+                                .and_then(|c| Some(c.text.contains("@deprecated")))
+                                .unwrap_or(false) {
+                                    continue;
+                            }
                             if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
                                 let js_module_str = 
                                     js_path.to_str()
                                         .ok_or(io::Error::new(io::ErrorKind::Other,
                                                "could not convert js filename to string"))?
                                         .to_owned();
-                                let mod_attributes = 
+                                let mod_attributes =
                                     vec![(String::from("module"), Some(js_module_str))];
                                 let mod_class = process_class(class_declaration, &comments);
                                 writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
@@ -250,7 +257,7 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
             }
         },
         _ => {
-            Err(format!("cannot process TsType::{:?}", ts_type))
+            Ok(wb::TypeDesc::Unimplemented)
         }
     }
 }
