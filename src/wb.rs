@@ -5,18 +5,18 @@ use std::convert::TryFrom;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum TypeDesc {
-    TsAny,
-    TsBoolean,
-    TsNull,
-    TsNumber,
-    TsString,
-    TsThis,
-    TsVoid,
-    TsUndefined,
-    TsArray(Box<TypeDesc>),
-    TsFunction(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
-    TsClass(String),
-    TsUnion(Vec<TypeDesc>),
+    #[serde(rename = "any")] TsAny,
+    #[serde(rename = "boolean")] TsBoolean,
+    #[serde(rename = "null")] TsNull,
+    #[serde(rename = "number")] TsNumber,
+    #[serde(rename = "string")] TsString,
+    #[serde(rename = "this")] TsThis,
+    #[serde(rename = "void")] TsVoid,
+    #[serde(rename = "undefined")] TsUndefined,
+    #[serde(rename = "array")] TsArray(Box<TypeDesc>),
+    #[serde(rename = "function")] TsFunction(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
+    #[serde(rename = "class")] TsClass(String),
+    #[serde(rename = "union")] TsUnion(Vec<TypeDesc>),
     Unimplemented,
 }
 
@@ -56,13 +56,16 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ParamDesc {
+    #[serde(rename = "type")]
     pub type_desc: TypeDesc,
     pub reference: bool,
     pub optional: bool,
 }
 
 impl ParamDesc {
-    pub fn new(type_desc : TypeDesc, reference : bool, optional: bool) -> ParamDesc {
+    pub fn new(type_desc : TypeDesc,
+               reference : bool,
+               optional: bool) -> ParamDesc {
         ParamDesc {
             type_desc: type_desc,
             reference: reference,
@@ -73,9 +76,13 @@ impl ParamDesc {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FunctionDesc {
+    #[serde(default)]
     pub attributes: Vec<(String, Option<String>)>,
-    pub name: String,
+    #[serde(default)]
+    pub name: String, // Option<String>
+    #[serde(default)]
     pub arguments: Vec<(String, ParamDesc)>,
+    #[serde(default)]
     pub returns: Option<ParamDesc>,
 }
 
@@ -95,17 +102,19 @@ impl FunctionDesc {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ClassDesc {
-    pub class_name: String,
+    pub name: String,
+    #[serde(default)]
     pub attributes: Vec<(String, Option<String>)>,
+    #[serde(default)]
     pub methods: Vec<FunctionDesc>
 }
 
 impl ClassDesc {
-    pub fn new(class_name : String,
+    pub fn new(name : String,
                attributes: Vec<(String, Option<String>)>,
                methods: Vec<FunctionDesc>) -> ClassDesc {
         ClassDesc {
-            class_name: class_name,
+            name: name,
             attributes: attributes,
             methods: methods
         }
@@ -128,18 +137,16 @@ impl ModuleDesc {
     }
 }
 
-pub struct Writer<'a, W: Write> {
+pub struct Writer<W: Write> {
     indentation: usize,
     output: BufWriter<W>,
-    overrides: &'a HashMap<String, HashMap<String, Vec<FunctionDesc>>>,
 }
 
-impl<'a, W> Writer<'a, W> where W: Write {
-    pub fn new(w: W, o: &'a HashMap<String, HashMap<String, Vec<FunctionDesc>>>) -> Writer<W> {
+impl<W> Writer<W> where W: Write {
+    pub fn new(w: W) -> Writer<W> {
         Writer {
             indentation: 0,
             output: BufWriter::new(w),
-            overrides: o,
         }
     }
 
@@ -184,7 +191,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
             let rs_type = {
                 if let TypeDesc::TsThis = arg.1.type_desc {
                     if let Some(class) = class {
-                        class.class_name.clone()
+                        class.name.clone()
                     }
                     else {
                         panic!("write_function requires the class for methods");
@@ -210,7 +217,7 @@ impl<'a, W> Writer<'a, W> where W: Write {
             let rs_type = match rt.type_desc {
                 TypeDesc::TsThis => {
                     if let Some(class) = class {
-                        class.class_name.clone()
+                        class.name.clone()
                     }
                     else {
                         panic!("write_function requires the class for methods");
@@ -236,20 +243,11 @@ impl<'a, W> Writer<'a, W> where W: Write {
 
     pub fn write_class(&mut self, class: &ClassDesc) -> io::Result<()> {
         self.write_export(&class.attributes)?;
-        let class_decl = format!("pub type {};", class.class_name);
+        let class_decl = format!("pub type {};", class.name);
         self.write_line(&class_decl)?;
         /* write class methods */
-        let overrides = self.overrides.get(&class.class_name);
-
         for function in &class.methods {
-            if let Some(replacements) = overrides.and_then(|f| f.get(&function.name)) {
-                for replacement in replacements {
-                    self.write_function(replacement, Some(class))?;
-                }
-            }
-            else {
-                self.write_function(function, Some(class))?;
-            }
+            self.write_function(function, Some(class))?;
         }
         Ok(())
     }

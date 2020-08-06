@@ -1,0 +1,85 @@
+---
+mode: override
+classes:
+  Color:
+    mode: override
+    methods:
+      constructor:
+        - attributes:
+            - - constructor
+              - null
+          name: from_string
+          arguments:
+            - - color
+              - type: string
+                reference: true
+                optional: false
+          returns:
+            type:
+              class: Color
+            reference: false
+            optional: true
+        - attributes:
+            - - constructor
+              - null
+          name: from_value
+          arguments:
+            - - value
+              - type: number
+                reference: false
+                optional: false
+          returns:
+            type:
+              class: Color
+            reference: false
+            optional: true
+        - attributes:
+            - - constructor
+              - null
+          name: from_rgb
+          arguments:
+            - - r
+              - type: number
+                reference: false
+                optional: false
+            - - g
+              - type: number
+                reference: false
+                optional: false
+            - - b
+              - type: number
+                reference: false
+                optional: false
+          returns:
+            type:
+              class: Color
+            reference: false
+            optional: true
+  Matrix4:
+    mode: override
+    methods:
+      setPosition:
+        - attributes:
+            - - method
+              - null
+            - - js_name
+              - setPosition
+          name: set_position
+          arguments:
+            - - x
+              - type: number
+                reference: false
+                optional: false
+            - - y
+              - type: number
+                reference: false
+                optional: false
+            - - z
+              - type: number
+                reference: false
+                optional: false
+          returns:
+            type:
+              class: Matrix4
+            reference: true
+            optional: false      

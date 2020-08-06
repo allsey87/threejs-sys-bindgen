@@ -1,0 +1,60 @@
+---
+mode: override
+classes:
+  BufferAttribute:
+    mode: override
+    methods:
+      set:
+        - mode: skip
+      toJSON:
+        - mode: skip
+  BufferGeometry:
+    mode: override
+    methods:
+      getIndex:
+        - mode: skip
+      setIndex:
+        - mode: skip
+      setAttribute:
+        - mode: skip
+      getAttribute:
+        - mode: skip
+      setFromPoints:
+        - mode: skip
+  EventDispatcher:
+    mode: override
+    methods:
+      dispatchEvent:
+        - mode: skip
+  Geometry:
+    mode: override
+    methods:
+      setFromPoints:
+        - mode: skip
+  RayCaster:
+    mode: override
+    methods:
+      setFromCamera:
+        - mode: skip
+  Int8Attribute:
+    mode: skip
+  UInt8Attribute:
+    mode: skip
+  Int8BufferAttribute:
+    mode: skip
+  Uint8BufferAttribute:
+    mode: skip
+  Uint8ClampedBufferAttribute:
+    mode: skip
+  Int16BufferAttribute:
+    mode: skip
+  Uint16BufferAttribute:
+    mode: skip
+  Int32BufferAttribute:
+    mode: skip
+  Uint32BufferAttribute:
+    mode: skip
+  Float32BufferAttribute:
+    mode: skip
+  Float64BufferAttribute:
+    mode: skip

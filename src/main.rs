@@ -1,6 +1,6 @@
 use inflector::Inflector;
 use std::{fs, io, path, vec, collections::HashMap};
-
+use serde::{Serialize, Deserialize};
 mod swc;
 mod wb;
 
@@ -89,8 +89,80 @@ fn main() -> std::io::Result<()> {
         .multiple(true))
     .get_matches();
 
-                    // Matrix4      // methods
-    let mut overrides : HashMap<String, HashMap<String, Vec<wb::FunctionDesc>>> = HashMap::new();
+    // new features of overrides
+    // 1. mark classes that are not to be bound
+    // 2. all objects inside one bindings file per module
+    // 3. for methods with the same name, handle the only use once case
+
+    #[derive(Serialize, Deserialize, Debug)]
+    #[serde(rename_all = "lowercase")]
+    enum OverrideMode {
+        Skip,
+        Override,
+    }
+
+    // Matrix4, Color, etc
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ClassOverride {
+        mode: OverrideMode,
+        #[serde(default)]
+        methods: HashMap<String, Vec<wb::FunctionDesc>>,
+    }
+
+    // math, core, etc
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ModuleOverride {
+        mode: OverrideMode,
+        #[serde(default)]
+        classes: HashMap<String, ClassOverride>,
+    }
+
+
+    let fn_attr = vec![("constructor".to_owned(), None), ("js_name".to_owned(), Some("justDoIt".to_owned()))];
+    let fn_name = "scale_matrix".to_owned();
+
+    let fn_type_a = wb::TypeDesc::TsClass("Matrix4".to_owned());
+    let fn_type_b = wb::TypeDesc::TsNumber;
+    let fn_type_c = wb::TypeDesc::TsBoolean;
+
+    let fn_params = vec![("matrix".to_owned(), wb::ParamDesc::new(fn_type_c, true, false)),
+                         ("scalar".to_owned(), wb::ParamDesc::new(fn_type_b, false, true))];
+    
+    let fn_returns = Some(wb::ParamDesc::new(fn_type_a, false, true));
+
+    let func = wb::FunctionDesc::new(fn_attr, fn_name, fn_params, fn_returns);
+
+    let mut method_overrides : HashMap<String, Vec<wb::FunctionDesc>> = HashMap::new();
+    method_overrides.insert("scaleMatrix".to_owned(), vec![func]);
+    let class_override = ClassOverride {
+        mode: OverrideMode::Override,
+        methods: method_overrides,
+    };
+
+    let mut class_overrides : HashMap<String, ClassOverride> = HashMap::new();
+    class_overrides.insert("Matrix4".to_owned(), class_override);
+    let module_override = ModuleOverride {
+        mode: OverrideMode::Skip,
+        classes: class_overrides,
+    };
+
+        
+    let res = serde_yaml::to_string(&module_override);
+    match res {
+        Err(err) => {
+            eprintln!("The error was: {}", err);
+        }
+        Ok(string) => {
+            fs::write("output.yaml", string.as_bytes()).unwrap();
+        },
+    }
+
+    let content = std::fs::read_to_string("overrides/math.yaml").unwrap();
+    
+
+    let parse = serde_yaml::from_str::<ModuleOverride>(&content);
+
+    println!("{:?}", parse);
 
     if let Some(or_dir) = matches.value_of("overrides") {
         for or_entry in fs::read_dir(or_dir)? {
@@ -102,7 +174,7 @@ fn main() -> std::io::Result<()> {
                      "could not convert ts filestem to string"))?
                 .to_owned();
             let or_buf = fs::read(&or_path)?;
-            overrides.insert(of_filestem, ron::de::from_bytes(&or_buf).unwrap());
+            //overrides.insert(of_filestem, ron::de::from_bytes(&or_buf).unwrap());
         }
     }
 
@@ -129,7 +201,7 @@ fn main() -> std::io::Result<()> {
                 let rs_path = rs_path.join(ts_file_name.replace(".d.ts", ".rs"));
 
                 
-                let mut writer = wb::Writer::new(fs::File::create(rs_path)?, &overrides);          
+                let mut writer = wb::Writer::new(fs::File::create(rs_path)?);
                 let imports = process_imports(&ts_module);
                 writer.write_imports(&imports)?;
                 writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
@@ -275,7 +347,7 @@ fn process_parameter(parameter: &swc_ecma_ast::Param)
         }
     }
     else {
-        Err("cannot process parameter without identifier".to_owned())
+        Err(format!("cannot process parameter without identifier {:?}", parameter))
     }
 }
 
