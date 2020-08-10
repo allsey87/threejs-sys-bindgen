@@ -111,69 +111,94 @@ fn main() -> std::io::Result<()> {
     if let Some(override_dir) = matches.value_of("overrides") {
         for override_entry in fs::read_dir(override_dir)? {
             let override_path = override_entry?.path();
-            let override_filestem = override_path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or(io::Error::new(io::ErrorKind::Other,
-                     "could not convert ts filestem to string"))?
-                .to_owned();
-            let override_file = fs::File::open(&override_path)?;
-            
-            let module_override = 
-                serde_yaml::from_reader::<_, ModuleOverride>(override_file)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-
-            overrides.insert(override_filestem, module_override);
+            if override_path
+                .extension()
+                .map_or(false, |ext| ext == "yaml") {
+                let override_filestem = override_path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or(io::Error::new(io::ErrorKind::Other,
+                         "could not convert filestem to string"))?
+                    .to_owned();
+                let override_file = fs::File::open(&override_path)?;           
+                let module_override = 
+                    serde_yaml::from_reader::<_, ModuleOverride>(override_file)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                overrides.insert(override_filestem, module_override);
+            }
         }
     }
 
+    /* TODO remove this once overrides work correctly? */
     let paths : Vec<&str> = matches.values_of("paths").unwrap().collect();
 
     for path in paths {
         if let Ok(iterator) = BindingsTargetIterator::new(path) {
             for ts_path in iterator {
-                let mut ts_path = ts_path?;
-                let ts_file_name = ts_path
+                let ts_path = ts_path?;
+                /* extract the typescript module name from the path */
+                let ts_module_name = ts_path
                     .file_name()
                     .and_then(|f| f.to_str())
+                    .and_then(|f| f.strip_suffix(".d.ts"))
                     .ok_or(io::Error::new(io::ErrorKind::Other,
-                           "could not convert ts filename to string"))?
+                           "could not convert typescript file to a module name"))?
                     .to_owned();
-                
-                let (ts_module, comments) = swc::parse_module(&ts_path)?;
-                
-                ts_path.pop();
-                let rs_path = path::Path::new("bindings").join(&ts_path);
-   
+                /* check if we have any overrides defined for this module */
+                let mod_overrides = overrides.get(&ts_module_name);
+                /* check if we should skip generating bindings for this module */
+                if let Some(mod_overrides) = mod_overrides {
+                    if let OverrideMode::Skip = mod_overrides.mode {
+                        continue;
+                    }
+                }
+                /* generate the AST and get the comments from the typescript */
+                let (ts_module, ts_comments) = swc::parse_module(&ts_path)?;
+                /* get the current directory */
+                let ts_dir = ts_path
+                    .parent()
+                    .ok_or(io::Error::new(io::ErrorKind::Other,
+                           "could not get the typescript directory"))?;
+                /* create the path to the javascript module */
+                let js_path = ts_dir.join(format!("{}.js", ts_module_name));
+                /* create the path to the rust binding */
+                let rs_path = path::Path::new("bindings")
+                    .join(ts_dir)
+                    .join(format!("{}.rs", ts_module_name));
+                /* create (all parts of) the directory for the rust bindings output */
                 fs::create_dir_all(&rs_path)?;
-                let js_path = ts_path.join(ts_file_name.replace(".d.ts", ".js"));
-                let rs_path = rs_path.join(ts_file_name.replace(".d.ts", ".rs"));
-
-                
+                /* create the module writer */
                 let mut writer = wb::Writer::new(fs::File::create(rs_path)?);
                 let imports = process_imports(&ts_module);
                 writer.write_imports(&imports)?;
                 writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
-    
+                /* process the components of the typescript module's body */
                 for item in &ts_module.body {
                     if let swc_ecma_ast::ModuleItem::ModuleDecl(declaration) = item {
                         if let swc_ecma_ast::ModuleDecl::ExportDecl(export) = declaration {
-                            if comments
+                            /* skip over deprecated export declarations */
+                            if ts_comments
                                 .take_leading_comments(export.span.lo())
                                 .and_then(|mut v| v.pop())
-                                .and_then(|c| Some(c.text.contains("@deprecated")))
-                                .unwrap_or(false) {
+                                .map_or(false, |c| c.text.contains("@deprecated")) {
                                     continue;
                             }
                             if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
-                                let js_module_str = 
-                                    js_path.to_str()
-                                        .ok_or(io::Error::new(io::ErrorKind::Other,
-                                               "could not convert js filename to string"))?
-                                        .to_owned();
+                                let cls_overrides = mod_overrides
+                                    .and_then(|m| m.classes.get(&class_declaration.ident.sym.to_string()));
+                                // TODO find a more idomatic way to express this
+                                if let Some(cls_overrides) = cls_overrides {
+                                    if let OverrideMode::Skip = cls_overrides.mode {
+                                        continue;
+                                    }
+                                }
                                 let mod_attributes =
-                                    vec![(String::from("module"), Some(js_module_str))];
-                                let mod_class = process_class(class_declaration, &comments);
+                                    vec![(String::from("module"), 
+                                          js_path.to_str().and_then(|s| Some(s.to_owned())))];
+                                // TODO pass in class overrides here
+                                //
+                                
+                                let mod_class = process_class(class_declaration, &ts_comments);
                                 writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
                             }
                         }
