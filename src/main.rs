@@ -1,6 +1,6 @@
 use inflector::Inflector;
 use std::{fs, io, path, vec, collections::HashMap};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize};
 mod swc;
 mod wb;
 
@@ -14,21 +14,25 @@ mod wb;
 // handle optional arguments (done)
 // handle complex types, arrays, callbacks
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
 enum OverrideMode {
     Skip,
     Override,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl Default for OverrideMode {
+    fn default() -> Self { OverrideMode::Skip }
+}
+
+#[derive(Default, Deserialize, Debug)]
 struct ClassOverride {
     mode: OverrideMode,
     #[serde(default)]
     methods: HashMap<String, Vec<wb::FunctionDesc>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Default, Deserialize, Debug)]
 struct ModuleOverride {
     mode: OverrideMode,
     #[serde(default)]
@@ -44,7 +48,6 @@ impl BindingsTargetIterator {
         Ok(BindingsTargetIterator(paths))
     }
 }
-
 
 /* implements a depth-first search for ts files */
 impl Iterator for BindingsTargetIterator {
@@ -118,9 +121,9 @@ fn main() -> std::io::Result<()> {
                     .file_stem()
                     .and_then(|stem| stem.to_str())
                     .ok_or(io::Error::new(io::ErrorKind::Other,
-                         "could not convert filestem to string"))?
+                           "could not convert filestem to string"))?
                     .to_owned();
-                let override_file = fs::File::open(&override_path)?;           
+                let override_file = fs::File::open(&override_path)?;
                 let module_override = 
                     serde_yaml::from_reader::<_, ModuleOverride>(override_file)
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -128,29 +131,36 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
-
-    /* TODO remove this once overrides work correctly? */
-    let paths : Vec<&str> = matches.values_of("paths").unwrap().collect();
-
+    /* create a vector of paths or an empty vector */
+    let paths : Vec<&str> = matches
+        .values_of("paths")
+        .map_or_else(Vec::new, |paths| paths.collect::<Vec<&str>>());
+    /* process those paths */
     for path in paths {
         if let Ok(iterator) = BindingsTargetIterator::new(path) {
             for ts_path in iterator {
                 let ts_path = ts_path?;
-                /* extract the typescript module name from the path */
+                /* extract the typescript module name from the file path */
                 let ts_module_name = ts_path
                     .file_name()
                     .and_then(|f| f.to_str())
                     .and_then(|f| f.strip_suffix(".d.ts"))
                     .ok_or(io::Error::new(io::ErrorKind::Other,
-                           "could not convert typescript file to a module name"))?
+                           "could not convert typescript file path to a module name"))?
+                    .to_owned();
+                /* extract the typescript module path from the file path */
+                let ts_module_path = ts_path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|p| p.to_str())
+                    .ok_or(io::Error::new(io::ErrorKind::Other,
+                           "could not convert typescript file path to a module path"))?
                     .to_owned();
                 /* check if we have any overrides defined for this module */
-                let mod_overrides = overrides.get(&ts_module_name);
+                let mod_overrides = overrides.entry(ts_module_path).or_default();
                 /* check if we should skip generating bindings for this module */
-                if let Some(mod_overrides) = mod_overrides {
-                    if let OverrideMode::Skip = mod_overrides.mode {
-                        continue;
-                    }
+                if matches!(mod_overrides.mode, OverrideMode::Skip) {
+                    continue;
                 }
                 /* generate the AST and get the comments from the typescript */
                 let (ts_module, ts_comments) = swc::parse_module(&ts_path)?;
@@ -162,13 +172,12 @@ fn main() -> std::io::Result<()> {
                 /* create the path to the javascript module */
                 let js_path = ts_dir.join(format!("{}.js", ts_module_name));
                 /* create the path to the rust binding */
-                let rs_path = path::Path::new("bindings")
-                    .join(ts_dir)
-                    .join(format!("{}.rs", ts_module_name));
+                let rs_module_dir = path::Path::new("bindings").join(ts_dir);
                 /* create (all parts of) the directory for the rust bindings output */
-                fs::create_dir_all(&rs_path)?;
+                fs::create_dir_all(&rs_module_dir)?;
+                let rs_module_path = rs_module_dir.join(format!("{}.rs", ts_module_name));
                 /* create the module writer */
-                let mut writer = wb::Writer::new(fs::File::create(rs_path)?);
+                let mut writer = wb::Writer::new(fs::File::create(rs_module_path)?);
                 let imports = process_imports(&ts_module);
                 writer.write_imports(&imports)?;
                 writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
@@ -183,22 +192,20 @@ fn main() -> std::io::Result<()> {
                                 .map_or(false, |c| c.text.contains("@deprecated")) {
                                     continue;
                             }
-                            if let swc_ecma_ast::Decl::Class(class_declaration) = &export.decl {
-                                let cls_overrides = mod_overrides
-                                    .and_then(|m| m.classes.get(&class_declaration.ident.sym.to_string()));
-                                // TODO find a more idomatic way to express this
-                                if let Some(cls_overrides) = cls_overrides {
-                                    if let OverrideMode::Skip = cls_overrides.mode {
-                                        continue;
-                                    }
+                            if let swc_ecma_ast::Decl::Class(cls_declaration) = &export.decl {
+                                /* get the overrides for this class */
+                                let cls_overrides = mod_overrides.classes
+                                    .entry(cls_declaration.ident.sym.to_string())
+                                    .or_default();
+                                /* skip if the override mode indicates this */
+                                if matches!(cls_overrides.mode, OverrideMode::Skip) {
+                                    continue;
                                 }
-                                let mod_attributes =
-                                    vec![(String::from("module"), 
-                                          js_path.to_str().and_then(|s| Some(s.to_owned())))];
-                                // TODO pass in class overrides here
-                                //
-                                
-                                let mod_class = process_class(class_declaration, &ts_comments);
+                                let mod_class = process_class(cls_declaration, cls_overrides,  &ts_comments);
+                                /* NOTE there is a one class per module assumption built-in here */
+                                let mod_attributes = vec![
+                                    (String::from("module"), js_path.to_str().and_then(|s| Some(s.to_owned())))
+                                ];
                                 writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
                             }
                         }
@@ -372,42 +379,51 @@ fn process_function(name: &str,
     }
 }
 
-fn process_class(class_declaration: &swc_ecma_ast::ClassDecl, 
+fn process_class(cls_declaration: &swc_ecma_ast::ClassDecl, 
+                 cls_overrides: &mut ClassOverride,
                  comments: &swc_common::comments::Comments) -> wb::ClassDesc {
-    let cls_name = class_declaration.ident.sym.to_string();
+    let cls_name = cls_declaration.ident.sym.to_string();
     let mut cls_attributes = Vec::new();
     let mut cls_methods = Vec::new();
     /* handle super class */
-    if let Some(class) = &class_declaration.class.super_class {
+    if let Some(class) = &cls_declaration.class.super_class {
         if let swc_ecma_ast::Expr::Ident(ident) = &**class {
             cls_attributes.push((String::from("extends"), Some(ident.sym.to_string())));
         }
     }
     /* handle methods */
-    for class_member in &class_declaration.class.body {
+    for class_member in &cls_declaration.class.body {
         match class_member {
             swc_ecma_ast::ClassMember::Constructor(constructor) => {
-                let fn_attributes = vec![(String::from("constructor"), None)];
-                let fn_name = String::from("new");
-                let fn_parameters : Vec<&swc_ecma_ast::Param> = constructor
-                    .params
-                    .iter()
-                    .filter_map(|p| match p {
-                        swc_ecma_ast::ParamOrTsParamProp::Param(param) => Some(param),
-                        _ => None,
-                    })
-                    .collect();
-                let fn_desc = 
-                    process_function(&fn_name, fn_attributes, &fn_parameters, &None);
-                match fn_desc {
-                    Ok(mut fn_desc) => {
-                        let fn_return_type = 
-                            wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
-                            fn_desc.returns = Some(fn_return_type);
-                        cls_methods.push(fn_desc);
-                    },
-                    Err(error) => {
-                        panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                let fn_overrides = cls_overrides.methods.get_mut("constructor");
+                if let Some(fn_overrides) = fn_overrides {
+                    /* by moving these function descriptors out of the vector, 
+                       we ensure that overloaded constructors are bound only once */
+                    cls_methods.append(fn_overrides);
+                }
+                else {
+                    let fn_attributes = vec![(String::from("constructor"), None)];
+                    let fn_name = String::from("new");
+                    let fn_parameters : Vec<&swc_ecma_ast::Param> = constructor
+                        .params
+                        .iter()
+                        .filter_map(|p| match p {
+                            swc_ecma_ast::ParamOrTsParamProp::Param(param) => Some(param),
+                            _ => None,
+                        })
+                        .collect();
+                    let fn_desc = 
+                        process_function(&fn_name, fn_attributes, &fn_parameters, &None);
+                    match fn_desc {
+                        Ok(mut fn_desc) => {
+                            let fn_return_type = 
+                                wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
+                                fn_desc.returns = Some(fn_return_type);
+                            cls_methods.push(fn_desc);
+                        },
+                        Err(error) => {
+                            panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                        }
                     }
                 }
             },
@@ -423,31 +439,39 @@ fn process_class(class_declaration: &swc_ecma_ast::ClassDecl,
                     }
                     let function = &class_method.function;
                     if let swc_ecma_ast::PropName::Ident(ident) = &class_method.key {
-                        let fn_name = ident.sym.to_snake_case();
-                        let mut fn_attributes = vec![(String::from("method"), None)];
-                        if ident.sym.to_string() != fn_name {
-                            fn_attributes.push((String::from("js_name"), Some(ident.sym.to_string()))); 
+                        let fn_overrides = cls_overrides.methods.get_mut(&ident.sym as &str);
+                        if let Some(fn_overrides) = fn_overrides {
+                            /* by moving these function descriptors out of the vector, 
+                               we ensure that overloaded methods are bound only once */
+                            cls_methods.append(fn_overrides);
                         }
-                        let mut fn_parameters = Vec::with_capacity(function.params.len());
-                        for param in &function.params {
-                            fn_parameters.push(param);
-                        }
-                        let fn_return_type = match &function.return_type {
-                            Some(fn_return_type) => {
-                                Some(&*fn_return_type.type_ann)
-                            },
-                            None => None
-                        };
-                        let fn_desc =
-                            process_function(&fn_name, fn_attributes, &fn_parameters, &fn_return_type);
-                        match fn_desc {
-                            Ok(mut fn_desc) => {
-                                let this_param = wb::ParamDesc::new(wb::TypeDesc::TsThis, true, false);
-                                fn_desc.arguments.insert(0, (String::from("this"), this_param));
-                                cls_methods.push(fn_desc);
-                            },
-                            Err(error) => {
-                                panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                        else {
+                            let fn_name = ident.sym.to_snake_case();
+                            let mut fn_attributes = vec![(String::from("method"), None)];
+                            if ident.sym.to_string() != fn_name {
+                                fn_attributes.push((String::from("js_name"), Some(ident.sym.to_string()))); 
+                            }
+                            let mut fn_parameters = Vec::with_capacity(function.params.len());
+                            for param in &function.params {
+                                fn_parameters.push(param);
+                            }
+                            let fn_return_type = match &function.return_type {
+                                Some(fn_return_type) => {
+                                    Some(&*fn_return_type.type_ann)
+                                },
+                                None => None
+                            };
+                            let fn_desc =
+                                process_function(&fn_name, fn_attributes, &fn_parameters, &fn_return_type);
+                            match fn_desc {
+                                Ok(mut fn_desc) => {
+                                    let this_param = wb::ParamDesc::new(wb::TypeDesc::TsThis, true, false);
+                                    fn_desc.arguments.insert(0, (String::from("this"), this_param));
+                                    cls_methods.push(fn_desc);
+                                },
+                                Err(error) => {
+                                    panic!(format!("Error processing {}::{}: {}", cls_name, fn_name, error));
+                                }
                             }
                         }
                     }
