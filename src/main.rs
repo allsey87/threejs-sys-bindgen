@@ -97,20 +97,39 @@ fn main() -> std::io::Result<()> {
         .help("Set the overrides directory")
         .long("overrides")
         .short("o")
+        .required(true)
         .takes_value(true)
-        .value_name("DIR"))
+        .value_name("OVERRIDE_DIR"))
+    .arg(clap::Arg::with_name("bindings-output")
+        .help("Set the bindings output directory")
+        .long("bindings-output")
+        .short("b")
+        .required(true)
+        .takes_value(true)
+        .value_name("OUTPUT_DIR"))
+    /* TODO remove this argument and set up build.rs to pull in the 
+       d.ts files etc */
+    /* TODO clean up bindings iterator, remove threejs segment from path */
     .arg(clap::Arg::with_name("paths")
         .help("The paths to search")
         .required(true)
         .multiple(true))
     .get_matches();
 
-    // new features of overrides
-    // 1. mark classes that are not to be bound
-    // 2. all objects inside one bindings file per module
-    // 3. for methods with the same name, handle the only use once case
-    let mut overrides : HashMap<String, ModuleOverride> = HashMap::new();
-    
+    /* create the output directory */
+    let output_path = matches
+        .value_of("bindings-output")
+        .map(std::path::Path::new)
+        .ok_or(
+            io::Error::new(io::ErrorKind::Other,
+                           "Could not parse bindings output argument"))?;
+    fs::create_dir_all(output_path)?;
+    let cargo_output_path = output_path.join("Cargo.toml");
+    let cargo_config = include_str!("template.toml");
+    fs::write(cargo_output_path, cargo_config)?;
+
+    /* load the overrides */
+    let mut overrides : HashMap<String, ModuleOverride> = HashMap::new();   
     if let Some(override_dir) = matches.value_of("overrides") {
         for override_entry in fs::read_dir(override_dir)? {
             let override_path = override_entry?.path();
@@ -172,7 +191,12 @@ fn main() -> std::io::Result<()> {
                 /* create the path to the javascript module */
                 let js_path = ts_dir.join(format!("{}.js", ts_module_name));
                 /* create the path to the rust binding */
-                let rs_module_dir = path::Path::new("bindings").join(ts_dir);
+                /* TODO tidy up this mess with threejs in the path */
+                let rs_module_dir = output_path
+                    .join("src")
+                    .join(ts_dir
+                        .strip_prefix("threejs")
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?);
                 /* create (all parts of) the directory for the rust bindings output */
                 fs::create_dir_all(&rs_module_dir)?;
                 let rs_module_path = rs_module_dir.join(format!("{}.rs", ts_module_name));
