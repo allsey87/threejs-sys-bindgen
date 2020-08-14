@@ -4,19 +4,20 @@ use serde::{Serialize, Deserialize};
 use std::convert::TryFrom;
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
 pub enum TypeDesc {
-    #[serde(rename = "any")] TsAny,
-    #[serde(rename = "boolean")] TsBoolean,
-    #[serde(rename = "null")] TsNull,
-    #[serde(rename = "number")] TsNumber,
-    #[serde(rename = "string")] TsString,
-    #[serde(rename = "this")] TsThis,
-    #[serde(rename = "void")] TsVoid,
-    #[serde(rename = "undefined")] TsUndefined,
-    #[serde(rename = "array")] TsArray(Box<TypeDesc>),
-    #[serde(rename = "function")] TsFunction(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
-    #[serde(rename = "class")] TsClass(String),
-    #[serde(rename = "union")] TsUnion(Vec<TypeDesc>),
+    Any,
+    Boolean,
+    Null,
+    Number,
+    String,
+    This,
+    Void,
+    Undefined,
+    Array(Box<TypeDesc>),
+    Function(Vec<(String, TypeDesc)>, Option<Box<TypeDesc>>),
+    Class(String),
+    Union(Vec<TypeDesc>),
     Unimplemented,
 }
 
@@ -25,20 +26,20 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
 
     fn try_from(type_desc: &'a TypeDesc) -> Result<Self, Self::Error> {
         match type_desc {
-            TypeDesc::TsAny => Ok("JsValue"),
-            TypeDesc::TsBoolean => Ok("bool"),
-            TypeDesc::TsNull => Err("cannot convert from null"),
-            TypeDesc::TsNumber => Ok("f64"),
+            TypeDesc::Any => Ok("JsValue"),
+            TypeDesc::Boolean => Ok("bool"),
+            TypeDesc::Null => Err("cannot convert from null"),
+            TypeDesc::Number => Ok("f64"),
             // it may be more ergonomic to just use &str or string here
             // &str is not an option since it is not supported by Option<&str>
             // two options are Option<String> and Option<JsString>
-            TypeDesc::TsString => Ok("String"),
-            TypeDesc::TsThis => Err("cannot convert from this"),
-            TypeDesc::TsVoid => Err("cannot convert from void"),
-            TypeDesc::TsUndefined => Err("cannot convert from undefined"),
+            TypeDesc::String => Ok("String"),
+            TypeDesc::This => Err("cannot convert from this"),
+            TypeDesc::Void => Err("cannot convert from void"),
+            TypeDesc::Undefined => Err("cannot convert from undefined"),
             TypeDesc::Unimplemented => Err("type not implemented"),
-            TypeDesc::TsArray(inner_type) => {
-                if let TypeDesc::TsNumber = **inner_type {
+            TypeDesc::Array(inner_type) => {
+                if let TypeDesc::Number = **inner_type {
                     /* it seems more efficient to just pass a slice here */
                     /* the glue code wraps the wasm memory buffer in a Float64Array for us */
                     Ok("&[f64]")
@@ -47,9 +48,9 @@ impl<'a> TryFrom<&'a TypeDesc> for &'a str {
                     Ok("js_sys::Array")
                 }
             },
-            TypeDesc::TsFunction(_, _) => Ok("js_sys::Function"),
-            TypeDesc::TsClass(identifier) => Ok(&identifier),
-            TypeDesc::TsUnion(_) => Err("cannot convert from union"),
+            TypeDesc::Function(_, _) => Ok("js_sys::Function"),
+            TypeDesc::Class(identifier) => Ok(&identifier),
+            TypeDesc::Union(_) => Err("cannot convert from union"),
         }
     }
 }
@@ -189,7 +190,7 @@ impl<W> Writer<W> where W: Write {
                 res.push_str(", ");
             }
             let rs_type = {
-                if let TypeDesc::TsThis = arg.1.type_desc {
+                if let TypeDesc::This = arg.1.type_desc {
                     if let Some(class) = class {
                         class.name.clone()
                     }
@@ -215,7 +216,7 @@ impl<W> Writer<W> where W: Write {
         let mut fn_str = format!("pub fn {}({})", function.name, arguments);
         if let Some(rt) = &function.returns {
             let rs_type = match rt.type_desc {
-                TypeDesc::TsThis => {
+                TypeDesc::This => {
                     if let Some(class) = class {
                         class.name.clone()
                     }

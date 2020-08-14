@@ -1,18 +1,14 @@
 use inflector::Inflector;
-use std::{fs, io, path, vec, collections::HashMap};
+use std::{fs, io::{self, Write}, path, vec, collections::HashMap};
 use serde::{Deserialize};
+
 mod swc;
 mod wb;
+
 
 // https://github.community/t5/How-to-use-Git-and-GitHub/How-can-I-download-a-specific-folder-from-a-GitHub-repo/td-p/88
 // for the generator library : use build script to pull in the ts files
 // for the output library: use build script to pull in the js files
-
-// TODOs
-// start walking directories
-// handle references
-// handle optional arguments (done)
-// handle complex types, arrays, callbacks
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -89,6 +85,21 @@ impl Iterator for BindingsTargetIterator {
 }
 
 fn main() -> std::io::Result<()> {
+    /* TODO generate lib.rs:
+         pub mod core;
+         pub mod math ... etc
+    */
+    /* TODO generate core/mod.rs, math/mod.rs ...:
+         pub mod object_3d;
+         pub mod geometry;
+
+         pub use self::object_3d::Object3D;
+         pub use self::geometry::Geometry;
+    */
+    /* TODO investigate the cause of:
+         #[wasm_bindgen]
+         pub fn ();
+   */
     let matches = clap::App::new("threejs-bindgen")
     .version("1.0")
     .author("Michael Allwright <allsey87@gmail.com>")
@@ -155,6 +166,7 @@ fn main() -> std::io::Result<()> {
         .values_of("paths")
         .map_or_else(Vec::new, |paths| paths.collect::<Vec<&str>>());
     /* process those paths */
+    let mut module_indices = HashMap::new();
     for path in paths {
         if let Ok(iterator) = BindingsTargetIterator::new(path) {
             for ts_path in iterator {
@@ -167,6 +179,7 @@ fn main() -> std::io::Result<()> {
                     .ok_or(io::Error::new(io::ErrorKind::Other,
                            "could not convert typescript file path to a module name"))?
                     .to_owned();
+                let ts_module_name = (ts_module_name.to_snake_case(), ts_module_name);
                 /* extract the typescript module path from the file path */
                 let ts_module_path = ts_path
                     .parent()
@@ -189,7 +202,7 @@ fn main() -> std::io::Result<()> {
                     .ok_or(io::Error::new(io::ErrorKind::Other,
                            "could not get the typescript directory"))?;
                 /* create the path to the javascript module */
-                let js_path = ts_dir.join(format!("{}.js", ts_module_name));
+                let js_path = ts_dir.join(format!("{}.js", ts_module_name.1));
                 /* create the path to the rust binding */
                 /* TODO tidy up this mess with threejs in the path */
                 let rs_module_dir = output_path
@@ -199,7 +212,13 @@ fn main() -> std::io::Result<()> {
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?);
                 /* create (all parts of) the directory for the rust bindings output */
                 fs::create_dir_all(&rs_module_dir)?;
-                let rs_module_path = rs_module_dir.join(format!("{}.rs", ts_module_name));
+                let rs_module_path = rs_module_dir
+                    .join(format!("{}.rs", ts_module_name.0));
+                /* store the snake case and camel cases names for the module index */               
+                module_indices
+                    .entry(rs_module_dir)
+                    .or_insert_with(Vec::new)
+                    .push(ts_module_name);
                 /* create the module writer */
                 let mut writer = wb::Writer::new(fs::File::create(rs_module_path)?);
                 let imports = process_imports(&ts_module);
@@ -236,6 +255,26 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
+            /* create module indices */
+            for module_index in module_indices.drain() {
+                let module_index_path = module_index.0.join("mod.rs");
+                let module_index_file = fs::File::create(module_index_path)?;
+                let mut module_index_buffer = io::BufWriter::new(module_index_file);
+                let mut module_index_entries = module_index.1;
+                module_index_entries.sort_unstable_by(|e1, e2| e1.cmp(e2));
+                for module_index_entry in module_index_entries.iter() {
+                    writeln!(&mut module_index_buffer,
+                             "pub mod {};",
+                             module_index_entry.0)?;
+                }
+                writeln!(&mut module_index_buffer, "")?;
+                for module_index_entry in module_index_entries.iter() {
+                    writeln!(&mut module_index_buffer,
+                             "pub use self::{}::{};",
+                             module_index_entry.0,
+                             module_index_entry.1)?;
+                }
+            }
         }
     }
     Ok(())
@@ -246,7 +285,7 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
     match ts_type {
         swc_ecma_ast::TsType::TsArrayType(ts_array_type) => {
             let inner = process_type(&ts_array_type.elem_type)?;
-            Ok(wb::TypeDesc::TsArray(Box::new(inner)))
+            Ok(wb::TypeDesc::Array(Box::new(inner)))
         },
         swc_ecma_ast::TsType::TsTypeRef(ts_type_ref) => {
             if let swc_ecma_ast::TsEntityName::Ident(ident) = &ts_type_ref.type_name {
@@ -255,14 +294,14 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
                     if let Some(params) = &ts_type_ref.type_params {
                         let param = &params.params[0];
                         let inner = process_type(&*param)?;
-                        Ok(wb::TypeDesc::TsArray(Box::new(inner)))
+                        Ok(wb::TypeDesc::Array(Box::new(inner)))
                     }
                     else {
                         Err("ArrayLike without type annotations".to_owned())
                     }
                 }
                 else {
-                    Ok(wb::TypeDesc::TsClass(ident.sym.to_string()))
+                    Ok(wb::TypeDesc::Class(ident.sym.to_string()))
                 }
             }
             else {
@@ -272,26 +311,26 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
         swc_ecma_ast::TsType::TsKeywordType(ts_keyword_type) => {
             match ts_keyword_type.kind {
                 swc_ecma_ast::TsKeywordTypeKind::TsNumberKeyword =>
-                    Ok(wb::TypeDesc::TsNumber),
+                    Ok(wb::TypeDesc::Number),
                 swc_ecma_ast::TsKeywordTypeKind::TsNullKeyword => 
-                    Ok(wb::TypeDesc::TsNull),
+                    Ok(wb::TypeDesc::Null),
                 swc_ecma_ast::TsKeywordTypeKind::TsBooleanKeyword =>
-                    Ok(wb::TypeDesc::TsBoolean),
+                    Ok(wb::TypeDesc::Boolean),
                 swc_ecma_ast::TsKeywordTypeKind::TsStringKeyword => 
-                    Ok(wb::TypeDesc::TsString),
+                    Ok(wb::TypeDesc::String),
                 swc_ecma_ast::TsKeywordTypeKind::TsAnyKeyword => 
-                    Ok(wb::TypeDesc::TsAny),
+                    Ok(wb::TypeDesc::Any),
                 swc_ecma_ast::TsKeywordTypeKind::TsVoidKeyword =>
-                    Ok(wb::TypeDesc::TsVoid),
+                    Ok(wb::TypeDesc::Void),
                 swc_ecma_ast::TsKeywordTypeKind::TsUndefinedKeyword =>
-                    Ok(wb::TypeDesc::TsUndefined),
+                    Ok(wb::TypeDesc::Undefined),
                 _ => {
                     Err(format!("cannot process TsKeywordType::{:?}", ts_keyword_type.kind))
                 }
             }
         },
         swc_ecma_ast::TsType::TsThisType(_) => {
-            Ok(wb::TypeDesc::TsThis)
+            Ok(wb::TypeDesc::This)
         },
         swc_ecma_ast::TsType::TsUnionOrIntersectionType(variant) => {
             match variant {
@@ -300,7 +339,7 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
                     for ts_type in &ts_union_type.types {
                         ts_types.push(process_type(&**ts_type)?);
                     }
-                    Ok(wb::TypeDesc::TsUnion(ts_types))
+                    Ok(wb::TypeDesc::Union(ts_types))
                 },
                 swc_ecma_ast::TsUnionOrIntersectionType::TsIntersectionType(ts_intersection_type) => {
                     Err(format!("cannot process TsIntersectionType::{{{:?}}}", ts_intersection_type.types))
@@ -327,7 +366,7 @@ fn process_type(ts_type: &swc_ecma_ast::TsType)
                         }
                     })?;
                 let fn_return_type = Box::new(process_type(&function.type_ann.type_ann)?);
-                Ok(wb::TypeDesc::TsFunction(fn_parameters, Some(fn_return_type)))
+                Ok(wb::TypeDesc::Function(fn_parameters, Some(fn_return_type)))
             }
             else {
                 Err(format!("cannot process TsType::{:?}", ts_type))
@@ -370,7 +409,7 @@ fn process_function(name: &str,
     if let Some(return_type) = return_type {
         let mut return_type = process_type(&return_type)?;
         // TODO do not filter out TsVoid here
-        if matches!(return_type, wb::TypeDesc::TsVoid) {
+        if matches!(return_type, wb::TypeDesc::Void) {
             Ok(wb::FunctionDesc::new(attributes,
                 name.to_owned(),
                 fn_arguments,
@@ -379,9 +418,9 @@ fn process_function(name: &str,
         else {
             let mut optional = false;
             /* handle special option case */
-            if let wb::TypeDesc::TsUnion(union) = &mut return_type {
+            if let wb::TypeDesc::Union(union) = &mut return_type {
                 match &union[..] {
-                    [_, wb::TypeDesc::TsNull] | [_, wb::TypeDesc::TsUndefined] => {
+                    [_, wb::TypeDesc::Null] | [_, wb::TypeDesc::Undefined] => {
                         return_type = union.remove(0);
                         optional = true;
                     },
@@ -441,7 +480,7 @@ fn process_class(cls_declaration: &swc_ecma_ast::ClassDecl,
                     match fn_desc {
                         Ok(mut fn_desc) => {
                             let fn_return_type = 
-                                wb::ParamDesc::new(wb::TypeDesc::TsThis, false, false);
+                                wb::ParamDesc::new(wb::TypeDesc::This, false, false);
                                 fn_desc.returns = Some(fn_return_type);
                             cls_methods.push(fn_desc);
                         },
@@ -489,7 +528,7 @@ fn process_class(cls_declaration: &swc_ecma_ast::ClassDecl,
                                 process_function(&fn_name, fn_attributes, &fn_parameters, &fn_return_type);
                             match fn_desc {
                                 Ok(mut fn_desc) => {
-                                    let this_param = wb::ParamDesc::new(wb::TypeDesc::TsThis, true, false);
+                                    let this_param = wb::ParamDesc::new(wb::TypeDesc::This, true, false);
                                     fn_desc.arguments.insert(0, (String::from("this"), this_param));
                                     cls_methods.push(fn_desc);
                                 },
