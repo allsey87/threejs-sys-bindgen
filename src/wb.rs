@@ -263,11 +263,10 @@ impl<W> Writer<W> where W: Write {
         Ok(())
     }
 
-    pub fn write_imports(&mut self, statements: &HashMap<String, Vec<String>>) -> io::Result<()> {
+    pub fn write_imports(&mut self, mut statements: HashMap<String, Vec<String>>) -> io::Result<()> {
         let mut imports = Vec::with_capacity(statements.len());
-        for (path, symbols) in statements {
-            let mut symbols = symbols.clone();
-            symbols.sort_by(|a, b| a.cmp(b));
+        for (path, mut symbols) in statements.drain() {
+            symbols.sort_unstable_by(|a, b| a.cmp(b));
             match symbols.len() {
                 0 => {},
                 1 => {
@@ -285,7 +284,7 @@ impl<W> Writer<W> where W: Write {
                 }
             }
         }
-        imports.sort_by(|a, b| a.cmp(b));
+        imports.sort_unstable_by(|a, b| a.cmp(b));
         for import in imports {
             self.write_line(&import)?;
         }

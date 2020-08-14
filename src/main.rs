@@ -222,7 +222,7 @@ fn main() -> std::io::Result<()> {
                 /* create the module writer */
                 let mut writer = wb::Writer::new(fs::File::create(rs_module_path)?);
                 let imports = process_imports(&ts_module);
-                writer.write_imports(&imports)?;
+                writer.write_imports(imports)?;
                 writer.write_line("\nuse wasm_bindgen::prelude::*;\n")?;
                 /* process the components of the typescript module's body */
                 for item in &ts_module.body {
