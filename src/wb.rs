@@ -183,27 +183,26 @@ impl<W> Writer<W> where W: Write {
         }
     }
 
-    pub fn write_function(&mut self, function: &FunctionDesc, class: Option<&ClassDesc>) -> io::Result<()> {
+    pub fn write_function(&mut self, function: &FunctionDesc, class_name: Option<&str>) -> io::Result<()> {
         self.write_export(&function.attributes)?;
-        let arguments = function.arguments.iter().fold(String::new(), |mut res, arg| {
+        let arguments = function.arguments
+            .iter()
+            .try_fold::<_, _, io::Result<String>>(String::new(), |mut res, arg| {
             if !res.is_empty() {
                 res.push_str(", ");
             }
-            let rs_type = {
-                if let TypeDesc::This = arg.1.type_desc {
-                    if let Some(class) = class {
-                        class.name.clone()
-                    }
-                    else {
-                        panic!("write_function requires the class for methods");
-                    }
-                }
-                else {
-                    <&str>::try_from(&arg.1.type_desc)
-                        .expect(&format!("Cannot convert parameter {} of {}", arg.0, function.name))
-                        .to_owned()
-                }
-            };
+            let rs_type = if let TypeDesc::This = arg.1.type_desc {
+                class_name.ok_or(
+                    io::Error::new(io::ErrorKind::Other,
+                                   "write_function requires the class for methods"))
+            }
+            else {
+                <&str>::try_from(&arg.1.type_desc)
+                    .map_err(|_e| io::Error::new(io::ErrorKind::Other, 
+                                                 format!("Cannot convert parameter {} of {}",
+                                                         arg.0,
+                                                         function.name)))
+            }?;
             let arg = match (arg.1.reference, arg.1.optional) {
                 (false, false) => format!("{}: {}", arg.0, rs_type),
                 (false, true) => format!("{}: Option<{}>", arg.0, rs_type),
@@ -211,23 +210,21 @@ impl<W> Writer<W> where W: Write {
                 (true, true) => format!("{}: &Option<{}>", arg.0, rs_type),
             };
             res.push_str(&arg);
-            res
-        });
+            Ok(res)
+        })?;
         let mut fn_str = format!("pub fn {}({})", function.name, arguments);
         if let Some(rt) = &function.returns {
             let rs_type = match rt.type_desc {
                 TypeDesc::This => {
-                    if let Some(class) = class {
-                        class.name.clone()
-                    }
-                    else {
-                        panic!("write_function requires the class for methods");
-                    }
+                    class_name.ok_or(
+                        io::Error::new(io::ErrorKind::Other,
+                                       "write_function requires the class for methods"))?
                 },
                 _ => {
                     <&str>::try_from(&rt.type_desc)
-                        .expect(&format!("Cannot convert return type of {}", function.name))
-                        .to_owned()
+                        .map_err(|_e| io::Error::new(io::ErrorKind::Other, 
+                                                    format!("Cannot convert return type of {}",
+                                                            function.name)))?
                 }
             };           
             let rt = match (rt.reference, rt.optional) {
@@ -242,22 +239,22 @@ impl<W> Writer<W> where W: Write {
         self.write_line(&fn_str)
     }
 
-    pub fn write_class(&mut self, class: &ClassDesc) -> io::Result<()> {
+    pub fn write_class(&mut self, class: ClassDesc) -> io::Result<()> {
         self.write_export(&class.attributes)?;
         let class_decl = format!("pub type {};", class.name);
         self.write_line(&class_decl)?;
         /* write class methods */
         for function in &class.methods {
-            self.write_function(function, Some(class))?;
+            self.write_function(function, Some(&class.name))?;
         }
         Ok(())
     }
 
-    pub fn write_module(&mut self, module: &ModuleDesc) -> io::Result<()> {
+    pub fn write_module(&mut self, module: ModuleDesc) -> io::Result<()> {
         self.write_export(&module.attributes)?;
         self.write_line("extern \"C\" {")?;
         self.set_indentation(1);
-        self.write_class(&module.class)?;
+        self.write_class(module.class)?;
         self.set_indentation(0);
         self.write_line("}")?;
         Ok(())

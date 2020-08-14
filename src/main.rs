@@ -249,7 +249,7 @@ fn main() -> std::io::Result<()> {
                                 let mod_attributes = vec![
                                     (String::from("module"), js_path.to_str().and_then(|s| Some(s.to_owned())))
                                 ];
-                                writer.write_module(&wb::ModuleDesc::new(mod_attributes, mod_class))?;
+                                writer.write_module(wb::ModuleDesc::new(mod_attributes, mod_class))?;
                             }
                         }
                     }
